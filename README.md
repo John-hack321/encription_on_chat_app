@@ -1,8 +1,10 @@
 # chat-app
 
+```
 group members : 
     JOHN OKELLO     SCS3/2286/2023
     BRIAN KINOTI
+```
 
 A one-on-one chat application built in C, developed as part of a network and distributed programming course. The project is being built incrementally starting from a monolithic architecture with socket communication on a single machine, then later refactored into a full client-server model that can run across two different machines.
 
@@ -94,7 +96,7 @@ The easiest path on Windows is to use **WSL (Windows Subsystem for Linux)** and 
 
 Click **Fork** on the GitHub page, then clone your fork:
 ```bash
-git clone https://github.com/YOUR_USERNAME/chat-app.git 
+git clone https://github.com/John-hack321/chat_app
 cd chat-app
 ```
 
