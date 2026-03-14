@@ -1,0 +1,30 @@
+# Ignore build directories
+/build/
+bin/
+obj/
+
+# user specific files
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+
+# Ignore compiled files
+*.o
+*.out
+*.exe
+
+# Ignore logs
+*.log
+
+# Ignore temporary files
+*.tmp
+*.temp
+
+# Ignore IDE specific files
+/.idea/
+/.vscode/
+
+# other part that are irrelevant 
+chat
+progress.txt

@@ -1,0 +1,3 @@
+john:ONLINE
+mike:ONLINE
+olsen:ONLINE
