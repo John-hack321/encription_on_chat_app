@@ -133,9 +133,6 @@ for each character c:  hash = hash * 33 + c
 The resulting integer is stored as a string in `users.txt`. At login, the entered password
 is hashed again and compared to the stored value. If the hashes match, login succeeds.
 
-> Note: djb2 is not cryptographically secure and is used here because no external
-> libraries are permitted. A production system would use bcrypt or Argon2.
-
 ---
 
 ## Requirements
