@@ -242,6 +242,20 @@
          send_msg(client_fd, CMD_ACK_OK);
      }
  
+     /* ── RECENT ── RECENT:user_a:user_b — last 8 messages between them ── */
+     else if (strcmp(command, CMD_RECENT) == 0) {
+         sscanf(cmd, "%*[^:]:%49[^:]:%49[^\n]", a1, a2);
+         build_recent_str(a1, a2, 8, response, sizeof(response));
+         send_msg(client_fd, response);
+     }
+ 
+     /* ── SENDERS ── SENDERS:username — who has messaged this user ── */
+     else if (strcmp(command, "SENDERS") == 0) {
+         sscanf(cmd, "%*[^:]:%49[^\n]", a1);
+         build_inbox_senders(a1, response, sizeof(response));
+         send_msg(client_fd, response);
+     }
+ 
      /* ── unknown command ── */
      else {
          snprintf(response, sizeof(response), "%s:unknown command", CMD_ACK_ERR);

@@ -34,6 +34,7 @@
  #define CMD_MSG         "MSG"         /* MSG:from:to:body                 */
  #define CMD_INBOX       "INBOX"       /* INBOX:username                   */
  #define CMD_HISTORY     "HISTORY"     /* HISTORY:user_a:user_b            */
+ #define CMD_RECENT      "RECENT"      /* RECENT:user_a:user_b — last 8 msgs */
  
  /* ── server → client responses ── */
  #define CMD_ACK_OK      "ACK:OK"

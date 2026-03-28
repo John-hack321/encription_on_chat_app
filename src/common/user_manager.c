@@ -40,6 +40,7 @@
  #include "user_manager.h"
  #include "auth.h"
  #include "protocol.h"
+
  
  /* ── internal: current time as "YYYY-MM-DD HH:MM" ── */
  static void now(char *buf, int size) {

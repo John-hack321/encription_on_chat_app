@@ -156,3 +156,128 @@
      flock(fileno(fp), LOCK_UN);
      fclose(fp);
  }
+ 
+ /* ============================================================
+  * FUNCTION : build_recent_str
+  * PURPOSE  : Return the last `limit` messages exchanged between
+  *            two users as a single string for sending over socket.
+  *
+  *   Strategy: read ALL matching messages into a circular buffer,
+  *   then only send the last `limit` of them. This avoids reading
+  *   the file twice and keeps memory usage fixed.
+  *
+  *   Output format:
+  *     RECENT_RESULT:sender|body~~sender|body~~...
+  *   Oldest message first so the client can print top to bottom.
+  * ============================================================ */
+ void build_recent_str(const char *user_a, const char *user_b,
+                       int limit, char *buf, int buf_size) {
+     snprintf(buf, buf_size, "RECENT_RESULT:");
+ 
+     FILE *fp = fopen(MESSAGES_FILE, "r");
+     if (fp == NULL) return;
+ 
+     flock(fileno(fp), LOCK_SH);
+ 
+     /* store matching lines in a circular buffer of `limit` slots */
+     char senders[20][50];
+     char bodies[20][MAX_BODY_LEN];
+     int  total = 0;
+ 
+     char line[MAX_BODY_LEN + 128];
+     char ts[24], from[50], to[50], body[MAX_BODY_LEN];
+ 
+     while (fgets(line, sizeof(line), fp) != NULL) {
+         if (sscanf(line, "%23[^|]|%49[^|]|%49[^|]|%1023[^\n]",
+                    ts, from, to, body) == 4) {
+             int a_b = strcasecmp(from,user_a)==0 && strcasecmp(to,user_b)==0;
+             int b_a = strcasecmp(from,user_b)==0 && strcasecmp(to,user_a)==0;
+             if (a_b || b_a) {
+                 /* circular slot — overwrites oldest when full */
+                 int slot = total % limit;
+                 strncpy(senders[slot], from,  49);
+                 strncpy(bodies[slot],  body, MAX_BODY_LEN - 1);
+                 senders[slot][49] = '\0';
+                 bodies[slot][MAX_BODY_LEN - 1] = '\0';
+                 total++;
+             }
+         }
+     }
+ 
+     flock(fileno(fp), LOCK_UN);
+     fclose(fp);
+ 
+     if (total == 0) return;
+ 
+     /*
+      * The circular buffer holds the last `limit` messages.
+      * Figure out the start index and count to iterate in order.
+      */
+     int count = total < limit ? total : limit;
+     int start = total < limit ? 0 : (total % limit);
+ 
+     for (int i = 0; i < count; i++) {
+         int slot = (start + i) % limit;
+         char entry[MAX_BODY_LEN + 64];
+         snprintf(entry, sizeof(entry), "%s|%s~~", senders[slot], bodies[slot]);
+         strncat(buf, entry, buf_size - strlen(buf) - 1);
+     }
+ }
+ 
+ /* ============================================================
+  * FUNCTION : build_inbox_senders
+  * PURPOSE  : Build a deduplicated list of people who have sent
+  *            messages to `username`, most recent sender first.
+  *
+  *   Output format:  SENDERS_RESULT:alice|bob|charlie|
+  * ============================================================ */
+ void build_inbox_senders(const char *username, char *buf, int buf_size) {
+     snprintf(buf, buf_size, "SENDERS_RESULT:");
+ 
+     FILE *fp = fopen(MESSAGES_FILE, "r");
+     if (fp == NULL) return;
+ 
+     flock(fileno(fp), LOCK_SH);
+ 
+     char senders[MAX_BODY_LEN];   /* ordered list, newest last */
+     char unique[50][50];
+     int  ucount = 0;
+ 
+     char line[MAX_BODY_LEN + 128];
+     char ts[24], from[50], to[50], body[MAX_BODY_LEN];
+     (void)senders;
+ 
+     while (fgets(line, sizeof(line), fp) != NULL) {
+         if (sscanf(line, "%23[^|]|%49[^|]|%49[^|]|%1023[^\n]",
+                    ts, from, to, body) == 4) {
+             if (strcasecmp(to, username) == 0) {
+                 /* check if already in list */
+                 int found = 0;
+                 for (int i = 0; i < ucount; i++) {
+                     if (strcasecmp(unique[i], from) == 0) {
+                         found = 1;
+                         /* move to end (most recent) */
+                         memmove(&unique[i], &unique[i+1],
+                                 (ucount - i - 1) * sizeof(unique[0]));
+                         strncpy(unique[ucount - 1], from, 49);
+                         break;
+                     }
+                 }
+                 if (!found && ucount < 50) {
+                     strncpy(unique[ucount], from, 49);
+                     unique[ucount][49] = '\0';
+                     ucount++;
+                 }
+             }
+         }
+     }
+ 
+     flock(fileno(fp), LOCK_UN);
+     fclose(fp);
+ 
+     /* build result string — reverse so newest is first */
+     for (int i = ucount - 1; i >= 0; i--) {
+         strncat(buf, unique[i], buf_size - strlen(buf) - 1);
+         strncat(buf, "|",       buf_size - strlen(buf) - 1);
+     }
+ }

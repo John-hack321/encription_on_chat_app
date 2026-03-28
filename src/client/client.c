@@ -2,26 +2,13 @@
  * SCS3304 — One-on-One Chat Application
  * Client Module
  *
- * HOW THE CLIENT WORKS:
- *
- *   The client connects to the server via a TCP socket, then presents
- *   a menu. Every menu action sends a command string to the server and
- *   waits for a response. The server does the actual work (file I/O,
- *   user lookups) and sends back a result.
- *
- *   LIVE CHAT — select():
- *   During a chat session, we need to watch TWO things at once:
- *     1. The keyboard  — the user might type a message
- *     2. The socket    — the other user might send a message
- *
- *   We cannot use blocking read() on both — if we block on keyboard
- *   input, we'd miss incoming messages. If we block on the socket,
- *   the user can't type.
- *
- *   select() solves this. It watches a set of file descriptors and
- *   returns as soon as ANY of them has data ready. We watch stdin
- *   (fd=0) and the socket simultaneously. Whichever has data first
- *   gets processed. This is the concurrency mechanism on the client.
+ * CHANGES FROM PREVIOUS VERSION:
+ *   - Inbox now shows a list of people who have messaged you.
+ *     Pick one and it shows the last 8 messages as context,
+ *     then drops you straight into the chat loop to reply.
+ *   - Start chat also loads the last 8 messages before you type
+ *     so there is always conversation context visible.
+ *   - select() still handles live two-way chat.
  */
 
  #include <stdio.h>
@@ -42,7 +29,6 @@
  static int  sock_fd = -1;
  static char me[MAX_NAME_LEN + 1] = "";
  
- /* ── helpers ── */
  static void clear_screen(void)           { printf("\033[2J\033[H"); }
  static void print_error(const char *m)   { printf("  [!] %s\n", m); }
  static void print_success(const char *m) { printf("  [+] %s\n", m); }
@@ -53,23 +39,63 @@
      else buf[0] = 0;
  }
  
- /* ── send command, receive response in one call ── */
  static int exchange(const char *cmd, char *resp, int resp_size) {
-     if (send_msg(sock_fd, cmd) < 0)              return -1;
-     if (recv_msg(sock_fd, resp, resp_size) < 0)  return -1;
+     if (send_msg(sock_fd, cmd) < 0)             return -1;
+     if (recv_msg(sock_fd, resp, resp_size) < 0) return -1;
      return 0;
  }
  
  /* ============================================================
+  * FUNCTION : print_recent_messages
+  * PURPOSE  : Fetch and display the last 8 messages between
+  *            `me` and `partner` so the user has context before
+  *            they start typing.
+  *
+  *   Server returns:  RECENT_RESULT:sender|body~~sender|body~~...
+  *   Our own messages appear in yellow, theirs in cyan.
+  * ============================================================ */
+ static void print_recent_messages(const char *partner) {
+     char cmd[BUFFER_SIZE], resp[BUFFER_SIZE];
+     snprintf(cmd, sizeof(cmd), "%s:%s:%s", CMD_RECENT, me, partner);
+ 
+     if (exchange(cmd, resp, sizeof(resp)) < 0) return;
+     if (strncmp(resp, "RECENT_RESULT:", 14) != 0) return;
+ 
+     char *data = resp + 14;
+     if (strlen(data) == 0) {
+         print_info("no previous messages — start the conversation!");
+         printf("\n");
+         return;
+     }
+ 
+     printf("  ┌──────────────────────────────────────────────────────┐\n");
+     printf("  │  last messages with %-32s│\n", partner);
+     printf("  ├──────────────────────────────────────────────────────┤\n");
+ 
+     char data_copy[BUFFER_SIZE];
+     strncpy(data_copy, data, sizeof(data_copy) - 1);
+     data_copy[sizeof(data_copy) - 1] = '\0';
+ 
+     char *entry = strtok(data_copy, "~~");
+     while (entry != NULL && strlen(entry) > 0) {
+         char sender[50], body[MAX_BODY_LEN];
+         if (sscanf(entry, "%49[^|]|%1023[^\n]", sender, body) == 2) {
+             if (strcasecmp(sender, me) == 0)
+                 printf("  │  \033[33myou\033[0m: %s\n", body);
+             else
+                 printf("  │  \033[36m%-10s\033[0m: %s\n", sender, body);
+         }
+         entry = strtok(NULL, "~~");
+     }
+ 
+     printf("  └──────────────────────────────────────────────────────┘\n");
+     printf("  (continuing — type /quit to leave)\n\n");
+ }
+ 
+ /* ============================================================
   * FUNCTION : chat_loop
-  * PURPOSE  : Live two-way chat session with another user.
-  *
-  *   Uses select() to monitor both stdin and the socket fd.
-  *   Whichever becomes readable first gets processed:
-  *     - stdin ready   → user typed something → send to server
-  *     - socket ready  → incoming message      → display it
-  *
-  *   Type /quit to leave the chat and return to the main menu.
+  * PURPOSE  : Live two-way chat. Loads last 8 messages first
+  *            for context, then enters the select() loop.
   * ============================================================ */
  static void chat_loop(const char *partner) {
      char input[MAX_BODY_LEN];
@@ -79,76 +105,170 @@
  
      clear_screen();
      printf("\n  ╔══════════════════════════════════════════╗\n");
-     printf("  ║  chatting with: %-25s║\n", partner);
-     printf("  ║  type /quit to leave                     ║\n");
+     printf("  ║  chat: %-15s  ↔  %-12s║\n", me, partner);
+     printf("  ║  /quit to leave                          ║\n");
      printf("  ╚══════════════════════════════════════════╝\n\n");
+ 
+     print_recent_messages(partner);
+ 
      printf("  you: ");
      fflush(stdout);
  
      while (1) {
-         /*
-          * Set up the fd_set — a set of file descriptors for select().
-          * We must call FD_ZERO and FD_SET every loop because
-          * select() modifies the set when it returns.
-          */
          FD_ZERO(&read_fds);
-         FD_SET(STDIN_FILENO, &read_fds);   /* fd 0 — keyboard */
-         FD_SET(sock_fd,      &read_fds);   /* our socket       */
+         FD_SET(STDIN_FILENO, &read_fds);
+         FD_SET(sock_fd,      &read_fds);
  
-         /*
-          * select() blocks until one of our fds has data.
-          * max_fd must be the highest fd + 1.
-          * NULL timeout means block forever until something arrives.
-          */
-         int max_fd = sock_fd + 1;
-         if (select(max_fd, &read_fds, NULL, NULL, NULL) < 0) break;
+         if (select(sock_fd + 1, &read_fds, NULL, NULL, NULL) < 0) break;
  
-         /* ── incoming message from server ── */
          if (FD_ISSET(sock_fd, &read_fds)) {
              if (recv_msg(sock_fd, buf, sizeof(buf)) < 0) {
                  print_error("lost connection to server.");
                  break;
              }
-             /* DELIVER:from:body */
              if (strncmp(buf, CMD_DELIVER, strlen(CMD_DELIVER)) == 0) {
                  char from[50], body[MAX_BODY_LEN];
                  sscanf(buf, "%*[^:]:%49[^:]:%1023[^\n]", from, body);
-                 /* move to new line, print message, reprint prompt */
                  printf("\r  \033[36m%-10s\033[0m: %s\n  you: ", from, body);
                  fflush(stdout);
              }
          }
  
-         /* ── keyboard input from user ── */
          if (FD_ISSET(STDIN_FILENO, &read_fds)) {
              if (fgets(input, sizeof(input), stdin) == NULL) break;
              input[strcspn(input, "\n")] = 0;
  
-             if (strlen(input) == 0) {
-                 printf("  you: "); fflush(stdout);
-                 continue;
-             }
+             if (strlen(input) == 0) { printf("  you: "); fflush(stdout); continue; }
  
-             /* /quit — leave chat */
-             if (strcmp(input, "/quit") == 0) {
-                 print_info("left the chat.");
-                 break;
-             }
+             if (strcmp(input, "/quit") == 0) { print_info("left the chat."); break; }
  
-             /* send message to server */
              snprintf(cmd, sizeof(cmd), "%s:%s:%s:%s", CMD_MSG, me, partner, input);
              char resp[BUFFER_SIZE];
-             if (exchange(cmd, resp, sizeof(resp)) < 0) {
-                 print_error("send failed.");
-                 break;
-             }
+             if (exchange(cmd, resp, sizeof(resp)) < 0) { print_error("send failed."); break; }
  
-             /* echo own message in yellow */
              printf("  \033[33myou\033[0m: %s\n  you: ", input);
              fflush(stdout);
          }
      }
      printf("\n");
+ }
+ 
+ /* ============================================================
+  * SCREEN : screen_inbox
+  * PURPOSE : Show who has messaged you. Pick one and reply
+  *           with full conversation context loaded.
+  * ============================================================ */
+ static void screen_inbox(void) {
+     char cmd[BUFFER_SIZE], resp[BUFFER_SIZE];
+ 
+     snprintf(cmd, sizeof(cmd), "SENDERS:%s", me);
+     if (exchange(cmd, resp, sizeof(resp)) < 0) { print_error("server error."); return; }
+ 
+     clear_screen();
+     printf("\n  ╔══════════════════════════════════════════╗\n");
+     printf("  ║  inbox — %-31s║\n", me);
+     printf("  ║  select a conversation to open           ║\n");
+     printf("  ╚══════════════════════════════════════════╝\n");
+ 
+     if (strncmp(resp, "SENDERS_RESULT:", 15) != 0 || strlen(resp + 15) == 0) {
+         printf("\n");
+         print_info("inbox is empty — nobody has sent you a message yet.");
+         printf("\n  press Enter to continue..."); getchar();
+         return;
+     }
+ 
+     char *data = resp + 15;
+     char  senders[50][50];
+     int   count = 0;
+ 
+     char data_copy[BUFFER_SIZE];
+     strncpy(data_copy, data, sizeof(data_copy) - 1);
+     char *token = strtok(data_copy, "|");
+ 
+     printf("\n  ┌────┬─────────────────────────────────────┐\n");
+     printf("  │ #  │ conversation with                   │\n");
+     printf("  ├────┼─────────────────────────────────────┤\n");
+ 
+     while (token != NULL && count < 50 && strlen(token) > 0) {
+         strncpy(senders[count], token, 49);
+         senders[count][49] = '\0';
+         printf("  │ %-2d │ %-35s │\n", count + 1, senders[count]);
+         count++;
+         token = strtok(NULL, "|");
+     }
+ 
+     if (count == 0) {
+         printf("  │  no conversations yet.                 │\n");
+         printf("  └────┴─────────────────────────────────────┘\n");
+         printf("\n  press Enter to continue..."); getchar();
+         return;
+     }
+ 
+     printf("  └────┴─────────────────────────────────────┘\n");
+     printf("\n  enter number to open (0 to cancel): ");
+ 
+     int pick;
+     if (scanf("%d", &pick) != 1) { while(getchar()!='\n'); return; }
+     while (getchar() != '\n');
+ 
+     if (pick < 1 || pick > count) return;
+ 
+     chat_loop(senders[pick - 1]);
+ }
+ 
+ /* ============================================================
+  * SCREEN : screen_start_chat
+  * ============================================================ */
+ static void screen_start_chat(void) {
+     char resp[BUFFER_SIZE];
+ 
+     if (exchange(CMD_LIST, resp, sizeof(resp)) < 0) { print_error("server error."); return; }
+     if (strncmp(resp, CMD_LIST_RESULT, strlen(CMD_LIST_RESULT)) != 0) return;
+ 
+     clear_screen();
+     printf("\n  ╔══════════════════════════════════════════╗\n");
+     printf("  ║  start chat — pick a user                ║\n");
+     printf("  ╚══════════════════════════════════════════╝\n");
+ 
+     char *data = resp + strlen(CMD_LIST_RESULT) + 1;
+     char  names[MAX_USERS][50], statuses[MAX_USERS][10];
+     int   count = 0;
+ 
+     char data_copy[BUFFER_SIZE];
+     strncpy(data_copy, data, sizeof(data_copy) - 1);
+     char *token = strtok(data_copy, "|");
+ 
+     printf("\n  ┌────┬───────────────────┬──────────┐\n");
+     printf("  │ #  │ username          │ status   │\n");
+     printf("  ├────┼───────────────────┼──────────┤\n");
+ 
+     while (token != NULL && count < MAX_USERS) {
+         sscanf(token, "%49[^:]:%9s", names[count], statuses[count]);
+         if (strcasecmp(names[count], me) != 0) {
+             if (strcmp(statuses[count], STATUS_ONLINE) == 0)
+                 printf("  │ %-2d │ %-17s │ \033[32m%-8s\033[0m │\n",
+                        count + 1, names[count], statuses[count]);
+             else
+                 printf("  │ %-2d │ %-17s │ %-8s │\n",
+                        count + 1, names[count], statuses[count]);
+         }
+         count++;
+         token = strtok(NULL, "|");
+     }
+     printf("  └────┴───────────────────┴──────────┘\n");
+ 
+     printf("\n  enter number (0 to cancel): ");
+     int pick;
+     if (scanf("%d", &pick) != 1) { while(getchar()!='\n'); return; }
+     while (getchar() != '\n');
+ 
+     if (pick < 1 || pick > count) return;
+ 
+     char partner[50];
+     strncpy(partner, names[pick - 1], sizeof(partner) - 1);
+     if (strcasecmp(partner, me) == 0) { print_error("cannot chat with yourself."); return; }
+ 
+     chat_loop(partner);
  }
  
  /* ============================================================
@@ -180,7 +300,6 @@
  
  /* ============================================================
   * SCREEN : screen_login
-  * OUTPUT  : 1 on success, 0 on failure
   * ============================================================ */
  static int screen_login(void) {
      char username[MAX_NAME_LEN + 1], password[64];
@@ -202,101 +321,8 @@
          printf("\n  welcome, %s!\n", me);
          return 1;
      }
- 
      print_error(resp + strlen(CMD_ACK_ERR) + 1);
      return 0;
- }
- 
- /* ============================================================
-  * SCREEN : screen_start_chat
-  * PURPOSE : List users, pick one, enter the chat loop
-  * ============================================================ */
- static void screen_start_chat(void) {
-     char resp[BUFFER_SIZE];
- 
-     /* ask server for user list */
-     if (exchange(CMD_LIST, resp, sizeof(resp)) < 0) { print_error("server error."); return; }
- 
-     /* parse LIST_RESULT:name:status|name:status|... */
-     if (strncmp(resp, CMD_LIST_RESULT, strlen(CMD_LIST_RESULT)) != 0) return;
- 
-     clear_screen();
-     printf("\n  ╔══════════════════════════════════════════╗\n");
-     printf("  ║  select a user to chat with              ║\n");
-     printf("  ╚══════════════════════════════════════════╝\n");
- 
-     char *data = resp + strlen(CMD_LIST_RESULT) + 1;
-     char  names[MAX_USERS][50];
-     char  statuses[MAX_USERS][10];
-     int   count = 0;
- 
-     /* split on | to get individual entries */
-     char data_copy[BUFFER_SIZE];
-     strncpy(data_copy, data, sizeof(data_copy));
-     char *token = strtok(data_copy, "|");
- 
-     printf("\n  ┌────┬───────────────────┬──────────┐\n");
-     printf("  │ #  │ username          │ status   │\n");
-     printf("  ├────┼───────────────────┼──────────┤\n");
- 
-     while (token != NULL && count < MAX_USERS) {
-         sscanf(token, "%49[^:]:%9s", names[count], statuses[count]);
-         if (strcasecmp(names[count], me) != 0) {   /* skip ourselves */
-             if (strcmp(statuses[count], STATUS_ONLINE) == 0)
-                 printf("  │ %-2d │ %-17s │ \033[32m%-8s\033[0m │\n",
-                        count + 1, names[count], statuses[count]);
-             else
-                 printf("  │ %-2d │ %-17s │ %-8s │\n",
-                        count + 1, names[count], statuses[count]);
-         }
-         count++;
-         token = strtok(NULL, "|");
-     }
-     printf("  └────┴───────────────────┴──────────┘\n");
- 
-     printf("\n  enter number (0 to cancel): ");
-     int pick;
-     if (scanf("%d", &pick) != 1) { while(getchar()!='\n'); return; }
-     while (getchar() != '\n');
- 
-     if (pick < 1 || pick > count) return;
- 
-     char partner[50];
-     strncpy(partner, names[pick - 1], sizeof(partner));
- 
-     if (strcasecmp(partner, me) == 0) { print_error("cannot chat with yourself."); return; }
- 
-     chat_loop(partner);
- }
- 
- /* ============================================================
-  * SCREEN : screen_inbox
-  * ============================================================ */
- static void screen_inbox(void) {
-     char cmd[BUFFER_SIZE], resp[BUFFER_SIZE];
-     snprintf(cmd, sizeof(cmd), "%s:%s", CMD_INBOX, me);
-     if (exchange(cmd, resp, sizeof(resp)) < 0) { print_error("server error."); return; }
- 
-     clear_screen();
-     printf("\n  ╔══════════════════════════════════════════╗\n");
-     printf("  ║  inbox for: %-29s║\n", me);
-     printf("  ╚══════════════════════════════════════════╝\n");
- 
-     /* parse INBOX_RESULT:entry~~entry~~ */
-     if (strncmp(resp, "INBOX_RESULT:", 13) != 0) { print_info("inbox empty."); return; }
- 
-     char *data = resp + 13;
-     if (strlen(data) == 0) { print_info("no messages yet."); return; }
- 
-     /* split on ~~ delimiter */
-     char *entry = strtok(data, "~~");
-     int   count = 0;
-     while (entry != NULL) {
-         printf("  %s\n", entry);
-         count++;
-         entry = strtok(NULL, "~~");
-     }
-     if (count == 0) print_info("no messages yet.");
  }
  
  /* ============================================================
@@ -338,8 +364,8 @@
          printf("\n  ╔══════════════════════════════════════════╗\n");
          printf("  ║  logged in as: %-26s║\n", me);
          printf("  ╠══════════════════════════════════════════╣\n");
-         printf("  ║  1.  start chat                          ║\n");
-         printf("  ║  2.  view inbox                          ║\n");
+         printf("  ║  1.  inbox  (reply to messages)          ║\n");
+         printf("  ║  2.  start new chat                      ║\n");
          printf("  ║  3.  search user                         ║\n");
          printf("  ║  4.  list all users                      ║\n");
          printf("  ║  5.  logout                              ║\n");
@@ -351,28 +377,27 @@
          while (getchar() != '\n');
  
          switch (choice) {
-             case 1: screen_start_chat(); break;
-             case 2: screen_inbox();      break;
+             case 1: screen_inbox();      break;
+             case 2: screen_start_chat(); break;
              case 3: screen_search();     break;
              case 4:
                  clear_screen();
                  if (exchange(CMD_LIST, resp, sizeof(resp)) == 0) {
-                     /* parse and display */
-                     char data_copy[BUFFER_SIZE];
-                     strncpy(data_copy, resp + strlen(CMD_LIST_RESULT) + 1, sizeof(data_copy));
+                     char dc[BUFFER_SIZE];
+                     strncpy(dc, resp + strlen(CMD_LIST_RESULT) + 1, sizeof(dc) - 1);
                      char names[MAX_USERS][50], statuses[MAX_USERS][10];
-                     int  count = 0;
-                     char *t = strtok(data_copy, "|");
+                     int  n = 0;
+                     char *t = strtok(dc, "|");
                      printf("\n  ┌────┬───────────────────┬──────────┐\n");
                      printf("  │ #  │ username          │ status   │\n");
                      printf("  ├────┼───────────────────┼──────────┤\n");
-                     while (t && count < MAX_USERS) {
-                         sscanf(t, "%49[^:]:%9s", names[count], statuses[count]);
-                         if (strcmp(statuses[count], STATUS_ONLINE) == 0)
-                             printf("  │ %-2d │ %-17s │ \033[32m%-8s\033[0m │\n", count+1, names[count], statuses[count]);
+                     while (t && n < MAX_USERS) {
+                         sscanf(t, "%49[^:]:%9s", names[n], statuses[n]);
+                         if (strcmp(statuses[n], STATUS_ONLINE) == 0)
+                             printf("  │ %-2d │ %-17s │ \033[32m%-8s\033[0m │\n", n+1, names[n], statuses[n]);
                          else
-                             printf("  │ %-2d │ %-17s │ %-8s │\n", count+1, names[count], statuses[count]);
-                         count++; t = strtok(NULL, "|");
+                             printf("  │ %-2d │ %-17s │ %-8s │\n", n+1, names[n], statuses[n]);
+                         n++; t = strtok(NULL, "|");
                      }
                      printf("  └────┴───────────────────┴──────────┘\n");
                  }
@@ -385,7 +410,7 @@
                  return;
              case 6: {
                  char confirm[8];
-                 printf("  type YES to confirm account deletion: ");
+                 printf("  type YES to confirm: ");
                  read_line(confirm, sizeof(confirm));
                  if (strcmp(confirm, "YES") == 0) {
                      snprintf(cmd, sizeof(cmd), "%s:%s", CMD_DEREGISTER, me);
@@ -398,22 +423,16 @@
              }
              default: print_error("invalid choice.");
          }
- 
          printf("\n  press Enter to continue..."); getchar();
      }
  }
  
  /* ============================================================
   * FUNCTION : client_run
-  * PURPOSE  : Connect to server and run the welcome menu
   * ============================================================ */
  void client_run(void) {
      struct sockaddr_in server_addr;
  
-     /*
-      * Create a TCP socket — this is just a file descriptor at this point,
-      * not yet connected to anything.
-      */
      sock_fd = socket(AF_INET, SOCK_STREAM, 0);
      if (sock_fd < 0) { perror("  [!] socket() failed"); exit(1); }
  
@@ -422,12 +441,6 @@
      server_addr.sin_port        = htons(SERVER_PORT);
      server_addr.sin_addr.s_addr = inet_addr(SERVER_IP);
  
-     /*
-      * connect() reaches out to the server at 127.0.0.1:8080.
-      * This triggers the server's accept() to return.
-      * If the server isn't running yet, this will fail with
-      * "Connection refused".
-      */
      if (connect(sock_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
          perror("  [!] connect() failed — is the server running?");
          exit(1);
@@ -435,7 +448,6 @@
  
      print_info("connected to server.");
  
-     /* welcome menu loop */
      int choice;
      while (1) {
          clear_screen();
@@ -452,16 +464,8 @@
          if (scanf("%d", &choice) != 1) { while(getchar()!='\n'); continue; }
          while (getchar() != '\n');
  
-         if (choice == 1) {
-             if (screen_login()) logged_in_menu();
-             else { printf("\n  press Enter to try again..."); getchar(); }
-         } else if (choice == 2) {
-             screen_register();
-             printf("\n  press Enter to continue..."); getchar();
-         } else if (choice == 3) {
-             printf("  goodbye.\n\n");
-             close(sock_fd);
-             exit(0);
-         }
+         if      (choice == 1) { if (screen_login()) logged_in_menu(); else { printf("\n  press Enter to try again..."); getchar(); } }
+         else if (choice == 2) { screen_register(); printf("\n  press Enter to continue..."); getchar(); }
+         else if (choice == 3) { printf("  goodbye.\n\n"); close(sock_fd); exit(0); }
      }
  }

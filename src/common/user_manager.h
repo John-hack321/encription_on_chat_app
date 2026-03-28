@@ -49,5 +49,6 @@ int  search_user(const char *username);
 void list_users(void);
 int  user_exists(const char *username);
 int  is_online(const char *username);
+void build_user_list(char *buf, int buf_size);
 
 #endif
