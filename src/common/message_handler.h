@@ -1,14 +1,10 @@
 /*
- * SCS3304 — One-on-One Chat Application
- * Message Handler Module Header
- *
- * Declares functions for sending, storing, and displaying messages.
- *
- * File formats:
- *   messages.txt  — timestamp|from|to|body     (inbox store)
- *   chat_log.txt  — [timestamp] from → to : body  (audit trail)
- */
-
+* SCS3304 — One-on-One Chat Application
+* Message Handler Module Header
+*
+* data/messages.txt  — timestamp|from|to|body
+* data/chat_log.txt  — [timestamp] from -> to : body
+*/
 #ifndef MESSAGE_HANDLER_H
 #define MESSAGE_HANDLER_H
 
@@ -17,12 +13,14 @@
 #define MAX_BODY_LEN   1024
 
 /*
- * send_message  — store a message from one user to another
- * show_inbox    — display all messages received by a user
- * show_conversation — display message thread between two users
+ * store_message   — write a message to both files (with flock)
+ * show_inbox      — print all messages received by username
+ * show_history    — print thread between two users
+ * build_inbox_str — build inbox as a string for sending over socket
  */
-int  send_message(const char *from, const char *to, const char *body);
+int  store_message(const char *from, const char *to, const char *body);
 void show_inbox(const char *username);
-void show_conversation(const char *user_a, const char *user_b);
+void show_history(const char *user_a, const char *user_b);
+void build_inbox_str(const char *username, char *buf, int buf_size);
 
 #endif
