@@ -216,16 +216,22 @@
  
          /*
           * Real-time delivery: look up recipient's socket fd.
-          * If they are connected right now, send the message directly.
-          * If they are offline, the message waits in messages.txt.
+          * Only deliver to the RECIPIENT (a2), never back to the
+          * sender (a1/client_fd) — the sender already echoed their
+          * own message locally so delivering it again causes duplicates.
           */
          int recipient_fd = session_find_fd(a2);
-         if (recipient_fd > 0) {
+         if (recipient_fd > 0 && recipient_fd != client_fd) {
              char deliver[BUFFER_SIZE];
              snprintf(deliver, sizeof(deliver), "%s:%s:%s", CMD_DELIVER, a1, body);
              send_msg(recipient_fd, deliver);
          }
  
+         /*
+          * Send ACK:OK back to the sender so the client knows the
+          * message was stored. We use a silent ACK that the chat loop
+          * will receive and discard — it does NOT print anything.
+          */
          send_msg(client_fd, CMD_ACK_OK);
      }
  

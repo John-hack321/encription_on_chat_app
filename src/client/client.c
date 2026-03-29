@@ -96,12 +96,31 @@
   * FUNCTION : chat_loop
   * PURPOSE  : Live two-way chat. Loads last 8 messages first
   *            for context, then enters the select() loop.
+  *
+  * HOW REAL-TIME WORKS:
+  *   select() watches stdin AND the socket simultaneously with
+  *   no blocking calls between iterations. When we send a message
+  *   we use send_msg() directly (no recv waiting for ACK) so the
+  *   loop immediately goes back to select() and stays responsive.
+  *   The ACK that comes back from the server is received silently
+  *   and discarded — it just keeps the protocol clean.
+  *
+  *   This means incoming messages appear the instant they arrive
+  *   regardless of whether the user is typing or idle.
   * ============================================================ */
  static void chat_loop(const char *partner) {
      char input[MAX_BODY_LEN];
      char buf[BUFFER_SIZE];
      char cmd[BUFFER_SIZE];
      fd_set read_fds;
+ 
+     /*
+      * waiting_for_ack tracks whether we just sent a message and
+      * are expecting an ACK:OK back. When true, the next socket
+      * read is treated as an ACK and discarded silently rather
+      * than printed as an incoming message.
+      */
+     int waiting_for_ack = 0;
  
      clear_screen();
      printf("\n  ╔══════════════════════════════════════════╗\n");
@@ -121,12 +140,28 @@
  
          if (select(sock_fd + 1, &read_fds, NULL, NULL, NULL) < 0) break;
  
+         /* ── data arrived on the socket ── */
          if (FD_ISSET(sock_fd, &read_fds)) {
              if (recv_msg(sock_fd, buf, sizeof(buf)) < 0) {
+                 printf("\n");
                  print_error("lost connection to server.");
                  break;
              }
-             if (strncmp(buf, CMD_DELIVER, strlen(CMD_DELIVER)) == 0) {
+ 
+             if (waiting_for_ack) {
+                 /*
+                  * This is the ACK:OK response to our last send.
+                  * Discard it silently and go back to listening.
+                  * Do NOT print it — it would clutter the chat.
+                  */
+                 waiting_for_ack = 0;
+ 
+             } else if (strncmp(buf, CMD_DELIVER, strlen(CMD_DELIVER)) == 0) {
+                 /*
+                  * Incoming message from the other user.
+                  * \r clears the "  you: " prompt line before printing
+                  * their message, then we reprint the prompt below.
+                  */
                  char from[50], body[MAX_BODY_LEN];
                  sscanf(buf, "%*[^:]:%49[^:]:%1023[^\n]", from, body);
                  printf("\r  \033[36m%-10s\033[0m: %s\n  you: ", from, body);
@@ -134,6 +169,7 @@
              }
          }
  
+         /* ── user typed something ── */
          if (FD_ISSET(STDIN_FILENO, &read_fds)) {
              if (fgets(input, sizeof(input), stdin) == NULL) break;
              input[strcspn(input, "\n")] = 0;
@@ -142,10 +178,17 @@
  
              if (strcmp(input, "/quit") == 0) { print_info("left the chat."); break; }
  
+             /*
+              * Send the message using send_msg() directly — NOT exchange().
+              * exchange() would block waiting for ACK and freeze the loop.
+              * Instead we set waiting_for_ack=1 so the next socket read
+              * knows to silently discard the ACK.
+              */
              snprintf(cmd, sizeof(cmd), "%s:%s:%s:%s", CMD_MSG, me, partner, input);
-             char resp[BUFFER_SIZE];
-             if (exchange(cmd, resp, sizeof(resp)) < 0) { print_error("send failed."); break; }
+             if (send_msg(sock_fd, cmd) < 0) { print_error("send failed."); break; }
+             waiting_for_ack = 1;
  
+             /* echo our own message immediately — no need to wait for server */
              printf("  \033[33myou\033[0m: %s\n  you: ", input);
              fflush(stdout);
          }
