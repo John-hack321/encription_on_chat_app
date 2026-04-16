@@ -5,3 +5,13 @@
 [2026-03-28 21:38:15] john123 -> jojo : ooh that's nice jojo
 [2026-03-28 21:38:45] jojo -> john123 : ooh you think so
 [2026-03-28 21:39:35] john123 -> jojo : yes I realy think so 
+[2026-04-16 17:32:34] jane -> john : hi john
+[2026-04-16 17:32:57] john -> jane : hello jane 
+[2026-04-16 17:33:25] jane -> john : 0
+[2026-04-16 17:33:27] jane -> john : 0
+[2026-04-16 18:33:35] john -> jane : hi jenipher
+[2026-04-16 18:34:04] john -> jane : you were to come
+[2026-04-16 20:22:24] john -> jane : hello
+[2026-04-16 20:22:30] john -> jane : how are you ? 
+[2026-04-16 20:31:25] john -> jane : [ENCRYPTED]
+[2026-04-16 22:25:22] jane -> john : [ENCRYPTED]

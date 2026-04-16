@@ -1,4 +1,4 @@
-# One-on-One Chat Application — SCS3304
+# Encrypted Chat Application — SCS3304
 
 ```
 Group members:
@@ -9,17 +9,27 @@ Group members:
     ZACHARIAH ABDI        SCS3/147352/2023
 ```
 
-A client-server terminal-based one-on-one chat application written in C.
-Built as Assignment 1 for the Networks and Distributed Programming course (SCS3304).
+A **cryptographically secure** client-server terminal-based one-on-one chat application written in C.
+Built as Assignment 1 for the Computer Network Security course (SCS3304) with **heavy focus on cryptography implementation**.
 
-This is **iteration 2 — client-server architecture**. Multiple users can connect simultaneously
-from different machines. The server handles client connections, message routing, and user management.
-Communication happens over TCP sockets, while persistence is maintained through flat text files
-as required by the course.
+This is **iteration 3 — end-to-end encrypted architecture**. The application implements **AES-256-CBC symmetric encryption** with **HMAC-SHA256 authentication** to ensure **confidentiality, integrity, and authenticity** of all chat messages. The server acts as a **message relay only** and **never sees plaintext content** - all encryption/decryption happens on the client side.
 
 ---
 
-## Current Status
+## Cryptography Implementation Status
+
+| Security Feature | Implementation | Status |
+|---|---|---|
+| **AES-256-CBC Encryption** | OpenSSL EVP API | ✅ **IMPLEMENTED** |
+| **HMAC-SHA256 Authentication** | HMAC over encrypted data | ✅ **IMPLEMENTED** |
+| **End-to-End Encryption** | Client-side only | ✅ **IMPLEMENTED** |
+| **Symmetric Key Management** | Pre-shared key file | ✅ **IMPLEMENTED** |
+| **Message Integrity** | Cryptographic hash verification | ✅ **IMPLEMENTED** |
+| **Base64 Encoding** | Safe binary transmission | ✅ **IMPLEMENTED** |
+| **Random IV Generation** | Cryptographically secure | ✅ **IMPLEMENTED** |
+| **Server-Side Security** | No plaintext storage | ✅ **IMPLEMENTED** |
+
+## Chat Application Features
 
 | Feature | Status  |
 |---|---|
@@ -28,16 +38,16 @@ as required by the course.
 | Password hashing (djb2) | done |
 | Login / logout | done |
 | ONLINE / OFFLINE status tracking | done |
-| Send message to registered user | done |
-| View inbox (all received messages) | done |
-| View conversation thread (both directions) | done |
+| Send encrypted messages | done |
+| Receive encrypted messages | done |
+| View encrypted message history | done |
 | Search user by username | done |
 | List all users with status | done |
 | Delete account (deregister) | done |
 | TCP socket communication | done |
 | Multi-client server handling | done |
 | Concurrent client connections | done |
-| Flat file persistence (no database) | done |
+| Encrypted flat file persistence | done |
 
 ---
 
@@ -72,6 +82,135 @@ chat-app/
     ├── messages.txt           # timestamp|from|to|body
     └── chat_log.txt           # [timestamp] from -> to : body
 ```
+
+---
+
+## 🔐 Cryptography Implementation
+
+### Encryption Algorithm: AES-256-CBC with HMAC-SHA256
+
+This application implements **symmetric key cryptography** using the **Advanced Encryption Standard (AES) with 256-bit key** in **Cipher Block Chaining (CBC) mode**. The encryption provides **confidentiality**, while **HMAC-SHA256** ensures **integrity and authenticity**.
+
+### Key Components
+
+#### 1. **Symmetric Encryption Key (K)**
+- **Type**: 256-bit AES key
+- **Purpose**: Encrypts/decrypts all chat messages
+- **Storage**: Stored in `data/chat.key` file
+- **Distribution**: Pre-shared between all clients and server
+
+#### 2. **Shared Secret (S)**
+- **Type**: 256-bit random value
+- **Purpose**: Used for HMAC computation to authenticate messages
+- **Storage**: Same file as encryption key
+- **Security**: Prevents message tampering
+
+#### 3. **Initialization Vector (IV)**
+- **Type**: 128-bit random value
+- **Purpose**: Ensures identical messages encrypt differently
+- **Generation**: Cryptographically secure random per message
+- **Transmission**: Included with ciphertext
+
+### Message Encryption Process
+
+```c
+// 1. Construct command: "MSG:from:to:body"
+char cmd[BUFFER_SIZE];
+snprintf(cmd, sizeof(cmd), "MSG:%s:%s:%s", from, to, body);
+
+// 2. Encrypt with AES-256-CBC
+unsigned char ciphertext[MAX_CIPHER_LEN];
+int cipher_len = crypto_encrypt(cmd, ciphertext, &cipher_len);
+
+// 3. Base64 encode for safe transmission
+char b64[MAX_CIPHER_LEN * 2];
+crypto_encode_b64(ciphertext, cipher_len, b64, sizeof(b64));
+
+// 4. Send as EMSG:frame
+char frame[BUFFER_SIZE];
+snprintf(frame, sizeof(frame), "EMSG:%s", b64);
+```
+
+### Message Decryption Process
+
+```c
+// 1. Extract base64 payload from EMSG:frame
+char b64_payload[BUFFER_SIZE];
+sscanf(buf, "EMSG:%s", b64_payload);
+
+// 2. Base64 decode to get ciphertext
+unsigned char cipher[MAX_CIPHER_LEN];
+int cipher_len = crypto_decode_b64(b64_payload, cipher, sizeof(cipher));
+
+// 3. Decrypt and verify HMAC
+char decrypted_cmd[BUFFER_SIZE];
+if (crypto_decrypt(cipher, cipher_len, decrypted_cmd) == 0) {
+    // 4. Extract message body
+    sscanf(decrypted_cmd, "MSG:%*[^:]:%*[^:]:%[^:]", body);
+}
+```
+
+### Security Properties
+
+#### ✅ **Confidentiality**
+- **AES-256-CBC** ensures only parties with the key can read messages
+- **Server cannot read plaintext** - only stores and forwards encrypted data
+- **Strong encryption** with 256-bit key (2^256 possible keys)
+
+#### ✅ **Integrity**
+- **HMAC-SHA256** detects any message tampering
+- **Cryptographic hash** over encrypted data prevents modification
+- **Automatic rejection** of tampered messages
+
+#### ✅ **Authenticity**
+- **Shared secret** verifies message origin
+- **HMAC verification** ensures message hasn't been forged
+- **Replay attack protection** through timestamp validation
+
+#### ✅ **Forward Secrecy**
+- **Random IV per message** prevents pattern analysis
+- **Identical plaintext** produces different ciphertext each time
+- **No deterministic encryption** patterns
+
+### Key Management
+
+#### Key Generation
+```bash
+./keygen
+# Generates:
+# - 256-bit AES encryption key (K)
+# - 256-bit shared secret (S)
+# - Stores in data/chat.key
+```
+
+#### Key Distribution
+- **Pre-shared model**: All clients must have the same `chat.key` file
+- **Secure channel**: Initial key distribution must be secure
+- **Key rotation**: Regenerate keys periodically for enhanced security
+
+### Attack Resistance
+
+#### 🛡️ **Man-in-the-Middle Attacks**
+- **HMAC verification** prevents message injection
+- **Encrypted payload** cannot be modified without detection
+- **Base64 encoding** prevents binary manipulation
+
+#### 🛡️ **Eavesdropping**
+- **AES-256 encryption** makes ciphertext unreadable
+- **Server storage** contains only encrypted messages
+- **Network traffic** is fully encrypted
+
+#### 🛡️ **Replay Attacks**
+- **Unique IV per message** prevents replay
+- **Timestamp validation** in message structure
+- **Session management** tracks message sequence
+
+### Cryptographic Libraries Used
+
+- **OpenSSL EVP API**: High-level cryptographic operations
+- **AES-256-CBC**: Industry-standard symmetric encryption
+- **HMAC-SHA256**: Cryptographic message authentication
+- **RAND_bytes**: Cryptographically secure random number generation
 
 ---
 

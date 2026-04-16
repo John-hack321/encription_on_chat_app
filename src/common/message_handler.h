@@ -20,6 +20,7 @@
   * build_inbox_str — build inbox as a string for sending over socket
   */
  int  store_message(const char *from, const char *to, const char *body);
+int  store_encrypted_message(const char *from, const char *to, const char *encrypted_body);
  void show_inbox(const char *username);
  void show_history(const char *user_a, const char *user_b);
  void build_inbox_str(const char *username, char *buf, int buf_size);

@@ -22,7 +22,7 @@
  #define SERVER_IP       "127.0.0.1"   /* localhost — same machine */
  #define SERVER_PORT     8080
  #define BACKLOG         10            /* max queued connections   */
- #define BUFFER_SIZE     2048
+ #define BUFFER_SIZE     4096
  
  /* ── client → server commands ── */
  #define CMD_REGISTER    "REG"         /* REG:username:password            */

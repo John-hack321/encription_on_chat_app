@@ -53,6 +53,40 @@
  }
  
  /* ============================================================
+  * FUNCTION : store_encrypted_message
+  * PURPOSE  : Store an encrypted message to messages.txt
+  *            The encrypted payload is stored as-is, only decrypted
+  *            by the intended recipient
+  * OUTPUT   : SUCCESS or ERR_NOT_FOUND if recipient missing
+  * ============================================================ */
+ int store_encrypted_message(const char *from, const char *to, const char *encrypted_body) {
+     if (!user_exists(to)) return ERR_NOT_FOUND;
+
+     char timestamp[24];
+     now(timestamp, sizeof(timestamp));
+
+     /* write encrypted message to messages.txt — lock while writing */
+     FILE *fp = fopen(MESSAGES_FILE, "a");
+     if (fp != NULL) {
+         flock(fileno(fp), LOCK_EX);
+         fprintf(fp, "%s|%s|%s|ENC:%s\n", timestamp, from, to, encrypted_body);
+         flock(fileno(fp), LOCK_UN);
+         fclose(fp);
+     }
+
+     /* write to chat_log.txt — note that it's encrypted */
+     fp = fopen(LOG_FILE, "a");
+     if (fp != NULL) {
+         flock(fileno(fp), LOCK_EX);
+         fprintf(fp, "[%s] %s -> %s : [ENCRYPTED]\n", timestamp, from, to);
+         flock(fileno(fp), LOCK_UN);
+         fclose(fp);
+     }
+
+     return SUCCESS;
+ }
+ 
+ /* ============================================================
   * FUNCTION : show_inbox
   * PURPOSE  : Print all messages addressed to username (terminal)
   * ============================================================ */

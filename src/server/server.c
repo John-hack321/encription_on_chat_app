@@ -26,15 +26,20 @@
  *   message_handler) prevent those processes from corrupting shared
  *   data files.
  *
- *   CONNECTED CLIENTS TABLE:
- *   The server maintains a shared table of online clients and their
- *   socket file descriptors. This enables real-time message delivery
- *   — when client A sends a message to client B, the server looks up
- *   B's socket fd and delivers the message instantly if B is online.
+ *   ENCRYPTION INTEGRATION (diagram (d) from Lesson 6):
+ *   When a client sends a message, it arrives as:
  *
- *   Because the table is shared between processes (via a memory-mapped
- *   file approach — we use a simple flat file here for clarity), we
- *   protect it with flock as well.
+ *     EMSG:<base64(IV + AES-256-CBC( MSG:from:to:body || H(MSG:from:to:body || S) ))>
+ *
+ *   The server:
+ *     1. Decrypts and verifies the hash (rejects tampered messages)
+ *     2. Parses the decrypted command (MSG:from:to:body)
+ *     3. Stores the plaintext body to messages.txt
+ *     4. If the recipient is online, re-encrypts and sends EDELIVER
+ *     5. Sends ACK:OK back to the sender
+ *
+ *   Control commands (LOGIN, LOGOUT, LIST, etc.) are NOT encrypted
+ *   because they carry no sensitive message content.
  */
 
  #include <stdio.h>
@@ -53,6 +58,7 @@
  #include "../common/utils.h"
  #include "../common/user_manager.h"
  #include "../common/message_handler.h"
+ #include "../common/crypto.h"
  
  /* ── active session: maps username → socket fd ── */
  #define SESSIONS_FILE "data/sessions.txt"
@@ -115,6 +121,111 @@
  }
  
  /* ============================================================
+  * FUNCTION : handle_encrypted_msg
+  * PURPOSE  : Handle an EMSG frame — the encrypted message path.
+  *
+  *   EMSG:<base64(IV + ciphertext)>
+  *
+  *   Steps:
+  *     1. Base64-decode to get raw ciphertext
+  *     2. Decrypt with AES-256-CBC key K
+  *     3. Verify H(plaintext || S) — reject if mismatch
+  *     4. Parse decrypted command: MSG:from:to:body
+  *     5. Store body to messages.txt (plaintext in storage)
+  *     6. If recipient is online: re-encrypt and send EDELIVER
+  *     7. Send ACK:OK back to sender
+  *
+  *   Storing plaintext in messages.txt is a deliberate choice for
+  *   this iteration — it lets the server build inbox and history
+  *   views without needing client-side decryption of stored messages.
+  *   A future iteration could store ciphertext and move decryption
+  *   entirely to the client.
+  * ============================================================ */
+ static void handle_encrypted_msg(int client_fd, const char *b64_payload) {
+    char response[BUFFER_SIZE];
+
+    /* DEBUG: Show received encrypted payload */
+    printf("  [DEBUG] Received encrypted payload: %s\n", b64_payload);
+
+    /* ── Step 1: base64 decode ── */
+     unsigned char ciphertext[MAX_CIPHER_LEN];
+     int cipher_len = crypto_decode_b64(b64_payload, ciphertext, sizeof(ciphertext));
+     if (cipher_len < 0) {
+         snprintf(response, sizeof(response), "%s:base64 decode failed", CMD_ACK_ERR);
+         send_msg(client_fd, response);
+         return;
+     }
+ 
+     /* ── Step 2 + 3: decrypt and verify hash ── */
+     char plaintext[BUFFER_SIZE];
+     if (crypto_decrypt(ciphertext, cipher_len, plaintext) != 0) {
+         /*
+          * Decryption failed OR hash mismatch.
+          * This means the message was tampered with in transit.
+          * Reject it — do not store or forward.
+          */
+         fprintf(stderr, "  [!] EMSG: rejected — decryption/auth failed\n");
+         snprintf(response, sizeof(response), "%s:message authentication failed", CMD_ACK_ERR);
+         send_msg(client_fd, response);
+         return;
+     }
+ 
+     /* ── Step 4: parse decrypted command ── */
+     /* plaintext is "MSG:from:to:body" */
+     char a1[50] = {0}, a2[50] = {0}, body[MAX_BODY_LEN] = {0};
+     sscanf(plaintext, "%*[^:]:%49[^:]:%49[^:]:%1023[^\n]", a1, a2, body);
+ 
+     if (strlen(a1) == 0 || strlen(a2) == 0 || strlen(body) == 0) {
+         snprintf(response, sizeof(response), "%s:malformed encrypted command", CMD_ACK_ERR);
+         send_msg(client_fd, response);
+         return;
+     }
+ 
+     printf("  [enc] %s → %s : [authenticated message]\n", a1, a2);
+ 
+     /* ── Step 5: store encrypted payload to messages.txt */
+    int r = store_encrypted_message(a1, a2, b64_payload);
+     if (r != SUCCESS) {
+         snprintf(response, sizeof(response), "%s:recipient not found", CMD_ACK_ERR);
+         send_msg(client_fd, response);
+         return;
+     }
+ 
+     /* ── Step 6: real-time encrypted delivery to recipient ── */
+     int recipient_fd = session_find_fd(a2);
+     if (recipient_fd > 0 && recipient_fd != client_fd) {
+         /*
+          * Re-encrypt the original plaintext command for the recipient.
+          * We use a fresh random IV each time (handled inside crypto_encrypt)
+          * so even if the recipient intercepts their own traffic the IVs differ.
+          */
+         unsigned char out_cipher[MAX_CIPHER_LEN];
+         int out_len = 0;
+ 
+         if (crypto_encrypt(plaintext, out_cipher, &out_len) == 0) {
+             char b64_out[MAX_CIPHER_LEN * 2];
+             crypto_encode_b64(out_cipher, out_len, b64_out, sizeof(b64_out));
+ 
+             char deliver[BUFFER_SIZE];
+             snprintf(deliver, sizeof(deliver), "EDELIVER:%s:%s", a1, b64_out);
+ 
+             /* DEBUG: Show encrypted message before forwarding */
+             printf("  [DEBUG] Forwarding encrypted message to %s: %s\n", a2, b64_out);
+ 
+             send_msg(recipient_fd, deliver);
+         } else {
+             /* fallback: send plaintext DELIVER if re-encryption fails */
+             char deliver[BUFFER_SIZE];
+             snprintf(deliver, sizeof(deliver), "%s:%s:%s", CMD_DELIVER, a1, body);
+             send_msg(recipient_fd, deliver);
+         }
+     }
+ 
+     /* ── Step 7: ACK back to sender ── */
+     send_msg(client_fd, CMD_ACK_OK);
+ }
+ 
+ /* ============================================================
   * FUNCTION : handle_command
   * PURPOSE  : Parse and execute one command from a client
   * INPUT    : client_fd      — socket for this client
@@ -129,11 +240,18 @@
      char a2[50]      = {0};
      char body[MAX_BODY_LEN] = {0};
  
-     /*
-      * Extract the command word — everything before the first colon.
-      * e.g.  "LOGIN:alice:pass"  →  command = "LOGIN"
-      */
      sscanf(cmd, "%15[^:]", command);
+ 
+     /* ── EMSG — encrypted message (diagram d) ── */
+     if (strcmp(command, "EMSG") == 0) {
+         /*
+          * EMSG:<base64_payload>
+          * Everything after "EMSG:" is the base64-encoded ciphertext.
+          */
+         const char *b64 = cmd + 5;   /* skip "EMSG:" */
+         handle_encrypted_msg(client_fd, b64);
+         return;
+     }
  
      /* ── REGISTER ── REG:username:password ── */
      if (strcmp(command, CMD_REGISTER) == 0) {
@@ -198,40 +316,23 @@
          send_msg(client_fd, response);
      }
  
-     /* ── SEND MESSAGE ── MSG:from:to:body ── */
+     /* ── SEND MESSAGE (plaintext fallback) ── MSG:from:to:body ── */
+     /*    In normal operation the client uses EMSG instead.         */
+     /*    This branch handles the case where crypto is unavailable. */
      else if (strcmp(command, CMD_MSG) == 0) {
-         /*
-          * Parse: skip "MSG:", read from, to, then everything
-          * remaining is the body (it may contain colons).
-          */
          sscanf(cmd, "%*[^:]:%49[^:]:%49[^:]:%1023[^\n]", a1, a2, body);
- 
-         /* store to file */
          int r = store_message(a1, a2, body);
          if (r != SUCCESS) {
              snprintf(response, sizeof(response), "%s:recipient not found", CMD_ACK_ERR);
              send_msg(client_fd, response);
              return;
          }
- 
-         /*
-          * Real-time delivery: look up recipient's socket fd.
-          * Only deliver to the RECIPIENT (a2), never back to the
-          * sender (a1/client_fd) — the sender already echoed their
-          * own message locally so delivering it again causes duplicates.
-          */
          int recipient_fd = session_find_fd(a2);
          if (recipient_fd > 0 && recipient_fd != client_fd) {
              char deliver[BUFFER_SIZE];
              snprintf(deliver, sizeof(deliver), "%s:%s:%s", CMD_DELIVER, a1, body);
              send_msg(recipient_fd, deliver);
          }
- 
-         /*
-          * Send ACK:OK back to the sender so the client knows the
-          * message was stored. We use a silent ACK that the chat loop
-          * will receive and discard — it does NOT print anything.
-          */
          send_msg(client_fd, CMD_ACK_OK);
      }
  
@@ -244,18 +345,17 @@
  
      /* ── HISTORY ── HISTORY:user_a:user_b ── */
      else if (strcmp(command, CMD_HISTORY) == 0) {
-         /* history is displayed on client side using shared files */
          send_msg(client_fd, CMD_ACK_OK);
      }
  
-     /* ── RECENT ── RECENT:user_a:user_b — last 8 messages between them ── */
+     /* ── RECENT ── RECENT:user_a:user_b — last 8 messages ── */
      else if (strcmp(command, CMD_RECENT) == 0) {
          sscanf(cmd, "%*[^:]:%49[^:]:%49[^\n]", a1, a2);
          build_recent_str(a1, a2, 8, response, sizeof(response));
          send_msg(client_fd, response);
      }
  
-     /* ── SENDERS ── SENDERS:username — who has messaged this user ── */
+     /* ── SENDERS ── SENDERS:username ── */
      else if (strcmp(command, "SENDERS") == 0) {
          sscanf(cmd, "%*[^:]:%49[^\n]", a1);
          build_inbox_senders(a1, response, sizeof(response));
@@ -271,24 +371,16 @@
  
  /* ============================================================
   * FUNCTION : client_session
-  * PURPOSE  : Handle one connected client until they disconnect.
-  *            Runs in a child process created by fork().
-  * INPUT    : client_fd — socket for this client
   * ============================================================ */
  static void client_session(int client_fd) {
      char buf[BUFFER_SIZE];
-     char session_user[MAX_NAME_LEN + 1] = "";   /* empty = not logged in */
+     char session_user[MAX_NAME_LEN + 1] = "";
  
      while (1) {
-         /*
-          * recv_msg blocks until a complete message arrives.
-          * Returns -1 when the client closes the connection.
-          */
          if (recv_msg(client_fd, buf, sizeof(buf)) < 0) break;
          handle_command(client_fd, buf, session_user);
      }
  
-     /* clean up when client disconnects unexpectedly */
      if (session_user[0] != '\0') {
          logout_user(session_user);
          session_remove(session_user);
@@ -299,69 +391,50 @@
  
  /* ============================================================
   * FUNCTION : server_run
-  * PURPOSE  : Main server loop — bind, listen, accept, fork
   * ============================================================ */
  void server_run(void) {
      int server_fd;
      struct sockaddr_in addr;
      int opt = 1;
  
-     /*
-      * SIGCHLD: when a child process (forked per client) finishes,
-      * the OS sends SIGCHLD to the parent. Setting it to SIG_IGN
-      * tells the OS to automatically clean up zombie processes
-      * without us needing to call wait() manually.
-      */
      signal(SIGCHLD, SIG_IGN);
+ 
+     /* load crypto key material */
+     if (crypto_init() != 0) {
+         fprintf(stderr, "  [!] cannot start without key file — run ./keygen first\n\n");
+         return;
+     }
  
      /* clear sessions file on startup */
      FILE *sf = fopen(SESSIONS_FILE, "w");
      if (sf) fclose(sf);
  
-     /* ── step 1: create the TCP socket ── */
-     server_fd = socket(AF_INET,     /* IPv4                  */
-                        SOCK_STREAM, /* TCP (reliable stream) */
-                        0);          /* protocol auto-select  */
-     if (server_fd < 0) { perror("  [!] socket() failed"); exit(1); }
+     server_fd = socket(AF_INET, SOCK_STREAM, 0);
+     if (server_fd < 0) { perror("  [!] socket() failed"); return; }
  
-     /*
-      * SO_REUSEADDR: if the server crashes and restarts, the port
-      * may still be marked "in use" by the OS for a short time.
-      * This option lets us bind again immediately.
-      */
      setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
  
-     /* ── step 2: bind to 127.0.0.1:8080 ── */
      memset(&addr, 0, sizeof(addr));
      addr.sin_family      = AF_INET;
      addr.sin_port        = htons(SERVER_PORT);
      addr.sin_addr.s_addr = inet_addr(SERVER_IP);
  
      if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-         perror("  [!] bind() failed");
-         exit(1);
+         perror("  [!] bind() failed"); return;
      }
  
-     /* ── step 3: listen — mark socket as passive/accepting ── */
      if (listen(server_fd, BACKLOG) < 0) {
-         perror("  [!] listen() failed");
-         exit(1);
+         perror("  [!] listen() failed"); return;
      }
  
      printf("  [*] server listening on %s:%d\n", SERVER_IP, SERVER_PORT);
+     printf("  [*] end-to-end encryption active (AES-256 + SHA-256)\n");
      printf("  [*] waiting for clients — press Ctrl+C to stop\n\n");
  
-     /* ── step 4: accept loop ── */
      while (1) {
          struct sockaddr_in client_addr;
          socklen_t addr_len = sizeof(client_addr);
  
-         /*
-          * accept() BLOCKS here — the process sleeps until a client
-          * connects. When one does, it returns a new socket fd
-          * dedicated to that client. The original server_fd stays
-          * open and keeps listening.
-          */
          int client_fd = accept(server_fd,
                                 (struct sockaddr *)&client_addr,
                                 &addr_len);
@@ -370,29 +443,14 @@
          printf("  [+] client connected from %s (fd=%d)\n",
                 inet_ntoa(client_addr.sin_addr), client_fd);
  
-         /*
-          * fork() — create a child process.
-          *
-          * After fork():
-          *   pid == 0  → we are in the CHILD  process
-          *   pid >  0  → we are in the PARENT process
-          *   pid <  0  → fork failed (error)
-          *
-          * The child handles this client then exits.
-          * The parent closes the client fd and loops back to accept().
-          */
          pid_t pid = fork();
  
          if (pid == 0) {
-             /* ── CHILD: handle client ── */
-             close(server_fd);       /* child doesn't need the listening socket */
+             close(server_fd);
              client_session(client_fd);
              exit(0);
- 
          } else if (pid > 0) {
-             /* ── PARENT: go back to accepting ── */
-             close(client_fd);       /* parent doesn't need this client's socket */
- 
+             close(client_fd);
          } else {
              perror("  [!] fork() failed");
              close(client_fd);

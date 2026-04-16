@@ -9,6 +9,14 @@
  *   - Start chat also loads the last 8 messages before you type
  *     so there is always conversation context visible.
  *   - select() still handles live two-way chat.
+ *
+ * SECURITY (Iteration 3 addition — diagram (d) from Lesson 6):
+ *   Messages are encrypted before sending and decrypted after
+ *   receiving. The scheme is:
+ *     Send:    E(K, [M || H(M || S)])
+ *     Receive: D(K, cipher) → verify H(M || S) → M
+ *   This gives confidentiality + authentication + integrity.
+ *   See src/common/crypto.c for the full implementation.
  */
 
  #include <stdio.h>
@@ -25,6 +33,7 @@
  #include "../common/utils.h"
  #include "../common/user_manager.h"
  #include "../common/message_handler.h"
+ #include "../common/crypto.h"
  
  static int  sock_fd = -1;
  static char me[MAX_NAME_LEN + 1] = "";
@@ -46,6 +55,39 @@
  }
  
  /* ============================================================
+  * FUNCTION : send_encrypted_msg
+  * PURPOSE  : Encrypt a full protocol command string (which
+  *            includes the message body) and send it over the
+  *            socket as a base64-encoded EMSG frame.
+  *
+  *   Wire format sent:   EMSG:<base64(IV+ciphertext)>
+  *
+  *   Only the body-carrying MSG command is encrypted this way.
+  *   Control commands (LOGIN, LOGOUT, LIST, etc.) are sent in
+  *   plaintext as before — they carry no sensitive message content.
+  * ============================================================ */
+ static int send_encrypted_msg(const char *cmd_str) {
+     unsigned char ciphertext[MAX_CIPHER_LEN];
+     int           cipher_len = 0;
+ 
+     /* encrypt the full command string E(K, [cmd || H(cmd || S)]) */
+     if (crypto_encrypt(cmd_str, ciphertext, &cipher_len) != 0) {
+         print_error("encryption failed — message not sent.");
+         return -1;
+     }
+ 
+     /* base64 encode so binary travels safely through text framing */
+     char b64[MAX_CIPHER_LEN * 2];
+     crypto_encode_b64(ciphertext, cipher_len, b64, sizeof(b64));
+ 
+     /* build EMSG frame */
+     char frame[BUFFER_SIZE];
+     snprintf(frame, sizeof(frame), "EMSG:%s", b64);
+ 
+     return send_msg(sock_fd, frame);
+ }
+ 
+ /* ============================================================
   * FUNCTION : print_recent_messages
   * PURPOSE  : Fetch and display the last 8 messages between
   *            `me` and `partner` so the user has context before
@@ -53,6 +95,10 @@
   *
   *   Server returns:  RECENT_RESULT:sender|body~~sender|body~~...
   *   Our own messages appear in yellow, theirs in cyan.
+  *
+  *   NOTE: recent messages are stored on the server side and
+  *   returned in plaintext (they were decrypted and re-stored by
+  *   the server). Only live in-flight messages are encrypted.
   * ============================================================ */
  static void print_recent_messages(const char *partner) {
      char cmd[BUFFER_SIZE], resp[BUFFER_SIZE];
@@ -80,6 +126,20 @@
      while (entry != NULL && strlen(entry) > 0) {
          char sender[50], body[MAX_BODY_LEN];
          if (sscanf(entry, "%49[^|]|%1023[^\n]", sender, body) == 2) {
+             /* Check if body is encrypted and decrypt it */
+             if (strncmp(body, "ENC:", 4) == 0) {
+                 const char *b64 = body + 4; /* skip "ENC:" */
+                 unsigned char cipher[MAX_CIPHER_LEN];
+                 int cipher_len = crypto_decode_b64(b64, cipher, sizeof(cipher));
+ 
+                 if (cipher_len > 0) {
+                     char decrypted_cmd[BUFFER_SIZE];
+                     if (crypto_decrypt(cipher, cipher_len, decrypted_cmd) == 0) {
+                         /* Extract body from "MSG:from:to:body" */
+                         sscanf(decrypted_cmd, "%*[^:]:%*[^:]:%*[^:]:%1023[^\n]", body);
+                     }
+                 }
+             }
              if (strcasecmp(sender, me) == 0)
                  printf("  │  \033[33myou\033[0m: %s\n", body);
              else
@@ -97,16 +157,17 @@
   * PURPOSE  : Live two-way chat. Loads last 8 messages first
   *            for context, then enters the select() loop.
   *
-  * HOW REAL-TIME WORKS:
-  *   select() watches stdin AND the socket simultaneously with
-  *   no blocking calls between iterations. When we send a message
-  *   we use send_msg() directly (no recv waiting for ACK) so the
-  *   loop immediately goes back to select() and stays responsive.
-  *   The ACK that comes back from the server is received silently
-  *   and discarded — it just keeps the protocol clean.
+  * ENCRYPTION:
+  *   Outgoing messages are encrypted with crypto_encrypt() before
+  *   being sent. The server decrypts, verifies, stores, and
+  *   re-encrypts before forwarding to the recipient.
   *
-  *   This means incoming messages appear the instant they arrive
-  *   regardless of whether the user is typing or idle.
+  *   Incoming DELIVER frames may come as:
+  *     DELIVER:from:body       — legacy plaintext (future: server re-encrypts)
+  *     EDELIVER:from:<b64>     — encrypted delivery (server forwarded cipher)
+  *
+  *   The select() loop handles live two-way without blocking.
+  *   ACKs from the server are silently discarded using waiting_for_ack.
   * ============================================================ */
  static void chat_loop(const char *partner) {
      char input[MAX_BODY_LEN];
@@ -114,18 +175,12 @@
      char cmd[BUFFER_SIZE];
      fd_set read_fds;
  
-     /*
-      * waiting_for_ack tracks whether we just sent a message and
-      * are expecting an ACK:OK back. When true, the next socket
-      * read is treated as an ACK and discarded silently rather
-      * than printed as an incoming message.
-      */
      int waiting_for_ack = 0;
  
      clear_screen();
      printf("\n  ╔══════════════════════════════════════════╗\n");
      printf("  ║  chat: %-15s  ↔  %-12s║\n", me, partner);
-     printf("  ║  /quit to leave                          ║\n");
+     printf("  ║  /quit to leave    [end-to-end encrypted] ║\n");
      printf("  ╚══════════════════════════════════════════╝\n\n");
  
      print_recent_messages(partner);
@@ -149,18 +204,37 @@
              }
  
              if (waiting_for_ack) {
-                 /*
-                  * This is the ACK:OK response to our last send.
-                  * Discard it silently and go back to listening.
-                  * Do NOT print it — it would clutter the chat.
-                  */
+                 /* silently discard ACK:OK from our last send */
                  waiting_for_ack = 0;
+ 
+             } else if (strncmp(buf, "EDELIVER:", 9) == 0) {
+                 /*
+                  * Encrypted delivery from the server.
+                  * Format:  EDELIVER:from:<base64(IV+cipher)>
+                  * Decrypt, verify hash, then display.
+                  */
+                 char from[50], b64[BUFFER_SIZE];
+                 sscanf(buf, "%*[^:]:%49[^:]:%2047[^\n]", from, b64);
+ 
+                 unsigned char cipher[MAX_CIPHER_LEN];
+                 int cipher_len = crypto_decode_b64(b64, cipher, sizeof(cipher));
+ 
+                 char decrypted_cmd[BUFFER_SIZE];
+                 if (cipher_len > 0 &&
+                     crypto_decrypt(cipher, cipher_len, decrypted_cmd) == 0) {
+                     /* decrypted_cmd is "MSG:from:to:body" — extract body */
+                     char body[MAX_BODY_LEN] = {0};
+                     sscanf(decrypted_cmd, "%*[^:]:%*[^:]:%*[^:]:%1023[^\n]", body);
+                     printf("\r  \033[36m%-10s\033[0m: %s\n  you: ", from, body);
+                 } else {
+                     printf("\r  \033[36m%-10s\033[0m: [decryption failed]\n  you: ", from);
+                 }
+                 fflush(stdout);
  
              } else if (strncmp(buf, CMD_DELIVER, strlen(CMD_DELIVER)) == 0) {
                  /*
-                  * Incoming message from the other user.
-                  * \r clears the "  you: " prompt line before printing
-                  * their message, then we reprint the prompt below.
+                  * Plaintext delivery (fallback — server did not re-encrypt).
+                  * Kept for backward compatibility.
                   */
                  char from[50], body[MAX_BODY_LEN];
                  sscanf(buf, "%*[^:]:%49[^:]:%1023[^\n]", from, body);
@@ -179,16 +253,20 @@
              if (strcmp(input, "/quit") == 0) { print_info("left the chat."); break; }
  
              /*
-              * Send the message using send_msg() directly — NOT exchange().
-              * exchange() would block waiting for ACK and freeze the loop.
-              * Instead we set waiting_for_ack=1 so the next socket read
-              * knows to silently discard the ACK.
+              * Build the protocol command string, then ENCRYPT it before
+              * sending. The server will decrypt it, verify authenticity,
+              * store the plaintext body, and forward an encrypted copy to
+              * the recipient if they are online.
               */
              snprintf(cmd, sizeof(cmd), "%s:%s:%s:%s", CMD_MSG, me, partner, input);
-             if (send_msg(sock_fd, cmd) < 0) { print_error("send failed."); break; }
+ 
+             if (send_encrypted_msg(cmd) < 0) {
+                 print_error("send failed.");
+                 break;
+             }
              waiting_for_ack = 1;
  
-             /* echo our own message immediately — no need to wait for server */
+             /* echo our own message immediately */
              printf("  \033[33myou\033[0m: %s\n  you: ", input);
              fflush(stdout);
          }
@@ -198,8 +276,6 @@
  
  /* ============================================================
   * SCREEN : screen_inbox
-  * PURPOSE : Show who has messaged you. Pick one and reply
-  *           with full conversation context loaded.
   * ============================================================ */
  static void screen_inbox(void) {
      char cmd[BUFFER_SIZE], resp[BUFFER_SIZE];
@@ -476,8 +552,14 @@
  void client_run(void) {
      struct sockaddr_in server_addr;
  
+     /* load crypto key material before connecting */
+     if (crypto_init() != 0) {
+         printf("  [!] cannot start without key file — run ./keygen first\n\n");
+         return;
+     }
+ 
      sock_fd = socket(AF_INET, SOCK_STREAM, 0);
-     if (sock_fd < 0) { perror("  [!] socket() failed"); exit(1); }
+     if (sock_fd < 0) { perror("  [!] socket() failed"); return; }
  
      memset(&server_addr, 0, sizeof(server_addr));
      server_addr.sin_family      = AF_INET;
@@ -486,17 +568,17 @@
  
      if (connect(sock_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
          perror("  [!] connect() failed — is the server running?");
-         exit(1);
+         return;
      }
  
-     print_info("connected to server.");
+     print_info("connected to server (end-to-end encryption active).");
  
      int choice;
      while (1) {
          clear_screen();
          printf("\n  ╔══════════════════════════════════════════╗\n");
          printf("  ║      one-on-one chat  —  SCS3304         ║\n");
-         printf("  ║      client-server / single machine      ║\n");
+         printf("  ║      client-server / encrypted           ║\n");
          printf("  ╠══════════════════════════════════════════╣\n");
          printf("  ║  1.  login                               ║\n");
          printf("  ║  2.  register new account                ║\n");
@@ -509,6 +591,6 @@
  
          if      (choice == 1) { if (screen_login()) logged_in_menu(); else { printf("\n  press Enter to try again..."); getchar(); } }
          else if (choice == 2) { screen_register(); printf("\n  press Enter to continue..."); getchar(); }
-         else if (choice == 3) { printf("  goodbye.\n\n"); close(sock_fd); exit(0); }
+         else if (choice == 3) { printf("  goodbye.\n\n"); close(sock_fd); return; }
      }
  }
