@@ -1,11 +1,4 @@
-/*
- * SCS3304 — One-on-One Chat Application
- * Client Entry Point
- *
- * Run: ./client
- *
- * Make sure the server is already running before starting the client.
- */
+
 
  #include <stdio.h>
  #include "client/client.h"

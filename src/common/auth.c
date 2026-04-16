@@ -1,10 +1,3 @@
-/*
- * SCS3304 — One-on-One Chat Application
- * Authentication Module Implementation
- *
- * Implements password hashing using the djb2 algorithm and
- * password verification by comparing computed vs stored hashes.
- */
 #include <stdio.h>
 #include <string.h>
 #include "auth.h"

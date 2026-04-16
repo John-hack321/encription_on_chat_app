@@ -1,7 +1,3 @@
-/*
- * SCS3304 — One-on-One Chat Application
- * Server Module Header
- */
 
  #ifndef SERVER_H
  #define SERVER_H

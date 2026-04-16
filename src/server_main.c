@@ -1,10 +1,3 @@
-/*
- * SCS3304 — One-on-One Chat Application
- * Server Entry Point
- *
- * Run: ./server
- */
-
  #include <stdio.h>
  #include "server/server.h"
  

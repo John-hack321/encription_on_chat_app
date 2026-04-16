@@ -1,12 +1,3 @@
-/*
- * SCS3304 — One-on-One Chat Application
- * Message Handler Module — Client-Server Version
- *
- * flock() is used on every file write for the same reason as in
- * user_manager.c — multiple clients may send messages simultaneously
- * and we must prevent concurrent writes from corrupting the files.
- */
-
  #include <stdio.h>
  #include <string.h>
  #include <time.h>
@@ -20,11 +11,7 @@
      strftime(buf, size, "%Y-%m-%d %H:%M:%S", tm_info);
  }
  
- /* ============================================================
-  * FUNCTION : store_message
-  * PURPOSE  : Persist a message to messages.txt and chat_log.txt
-  * OUTPUT   : SUCCESS or ERR_NOT_FOUND if recipient missing
-  * ============================================================ */
+
  int store_message(const char *from, const char *to, const char *body) {
      if (!user_exists(to)) return ERR_NOT_FOUND;
  
@@ -52,13 +39,7 @@
      return SUCCESS;
  }
  
- /* ============================================================
-  * FUNCTION : store_encrypted_message
-  * PURPOSE  : Store an encrypted message to messages.txt
-  *            The encrypted payload is stored as-is, only decrypted
-  *            by the intended recipient
-  * OUTPUT   : SUCCESS or ERR_NOT_FOUND if recipient missing
-  * ============================================================ */
+
  int store_encrypted_message(const char *from, const char *to, const char *encrypted_body) {
      if (!user_exists(to)) return ERR_NOT_FOUND;
 
@@ -86,10 +67,7 @@
      return SUCCESS;
  }
  
- /* ============================================================
-  * FUNCTION : show_inbox
-  * PURPOSE  : Print all messages addressed to username (terminal)
-  * ============================================================ */
+
  void show_inbox(const char *username) {
      FILE *fp = fopen(MESSAGES_FILE, "r");
      if (fp == NULL) { printf("  [*] inbox is empty.\n"); return; }
@@ -124,10 +102,7 @@
      fclose(fp);
  }
  
- /* ============================================================
-  * FUNCTION : show_history
-  * PURPOSE  : Print message thread between two users (terminal)
-  * ============================================================ */
+
  void show_history(const char *user_a, const char *user_b) {
      FILE *fp = fopen(MESSAGES_FILE, "r");
      if (fp == NULL) { printf("  [*] no history yet.\n"); return; }
@@ -161,11 +136,7 @@
      fclose(fp);
  }
  
- /* ============================================================
-  * FUNCTION : build_inbox_str
-  * PURPOSE  : Build inbox as a single string to send over socket
-  *            Each message separated by  ~~  as delimiter
-  * ============================================================ */
+
  void build_inbox_str(const char *username, char *buf, int buf_size) {
      FILE *fp = fopen(MESSAGES_FILE, "r");
      snprintf(buf, buf_size, "INBOX_RESULT:");
@@ -190,20 +161,7 @@
      flock(fileno(fp), LOCK_UN);
      fclose(fp);
  }
- 
- /* ============================================================
-  * FUNCTION : build_recent_str
-  * PURPOSE  : Return the last `limit` messages exchanged between
-  *            two users as a single string for sending over socket.
-  *
-  *   Strategy: read ALL matching messages into a circular buffer,
-  *   then only send the last `limit` of them. This avoids reading
-  *   the file twice and keeps memory usage fixed.
-  *
-  *   Output format:
-  *     RECENT_RESULT:sender|body~~sender|body~~...
-  *   Oldest message first so the client can print top to bottom.
-  * ============================================================ */
+
  void build_recent_str(const char *user_a, const char *user_b,
                        int limit, char *buf, int buf_size) {
      snprintf(buf, buf_size, "RECENT_RESULT:");
@@ -258,13 +216,7 @@
      }
  }
  
- /* ============================================================
-  * FUNCTION : build_inbox_senders
-  * PURPOSE  : Build a deduplicated list of people who have sent
-  *            messages to `username`, most recent sender first.
-  *
-  *   Output format:  SENDERS_RESULT:alice|bob|charlie|
-  * ============================================================ */
+
  void build_inbox_senders(const char *username, char *buf, int buf_size) {
      snprintf(buf, buf_size, "SENDERS_RESULT:");
  

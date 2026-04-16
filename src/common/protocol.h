@@ -1,20 +1,3 @@
-/*
- * SCS3304 — One-on-One Chat Application
- * Client-Server Model — Single Machine
- * Protocol Header
- *
- * This file defines every constant shared between the client and server.
- * Think of it as the rulebook both sides agree on before talking.
- *
- * MESSAGE FORMAT (layer 5 — application protocol):
- *   Every message sent over the socket looks like:
- *   [4-byte length][COMMAND:arg1:arg2:...]
- *
- *   The 4-byte length header solves the TCP framing problem —
- *   TCP is a stream, not a message system, so without a length
- *   prefix the receiver doesn't know where one message ends.
- */
-
  #ifndef PROTOCOL_H
  #define PROTOCOL_H
  

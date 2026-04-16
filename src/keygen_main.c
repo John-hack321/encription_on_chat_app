@@ -1,21 +1,3 @@
-/*
- * SCS3304 — One-on-One Chat Application
- * Key Generation Utility
- *
- * Run ONCE to create data/chat.key before starting the server or client.
- * The same key file must be present on both sides (client and server).
- *
- * Usage:
- *   ./keygen
- *
- * Output:
- *   data/chat.key  — contains AES-256 key K and shared secret S (hex)
- *
- * After running:
- *   ./server    (reads data/chat.key automatically)
- *   ./client    (reads data/chat.key automatically)
- */
-
 #include <stdio.h>
 #include "common/crypto.h"
 

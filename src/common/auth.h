@@ -1,10 +1,4 @@
-/*
- * SCS3304 — One-on-One Chat Application
- * Authentication Module Header
- *
- * Declares password hashing and verification functions.
- * Uses the djb2 algorithm — no external libraries required.
- */
+
 
 #ifndef AUTH_H
 #define AUTH_H

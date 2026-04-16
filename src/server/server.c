@@ -1,47 +1,3 @@
-/*
- * SCS3304 — One-on-One Chat Application
- * Server Module
- *
- * HOW THIS SERVER WORKS:
- *
- *   1. We create one listening socket and bind it to port 8080.
- *      This socket's only job is to wait for incoming connections.
- *
- *   2. When a client connects, accept() returns a brand new socket
- *      file descriptor just for that client. The listening socket
- *      stays open and keeps waiting for more clients.
- *
- *   3. We call fork() immediately after accept(). This creates a
- *      child process that is an exact copy of the server at that
- *      moment. The child closes the listening socket (it doesn't
- *      need it) and handles the client. The parent closes the
- *      client socket (the child has it) and loops back to accept().
- *
- *   4. The child process handles all commands from its client until
- *      the client disconnects, then exits.
- *
- *   CONCURRENCY ACHIEVED:
- *   Multiple clients are handled simultaneously — each in their own
- *   child process. File locks (flock in user_manager and
- *   message_handler) prevent those processes from corrupting shared
- *   data files.
- *
- *   ENCRYPTION INTEGRATION (diagram (d) from Lesson 6):
- *   When a client sends a message, it arrives as:
- *
- *     EMSG:<base64(IV + AES-256-CBC( MSG:from:to:body || H(MSG:from:to:body || S) ))>
- *
- *   The server:
- *     1. Decrypts and verifies the hash (rejects tampered messages)
- *     2. Parses the decrypted command (MSG:from:to:body)
- *     3. Stores the plaintext body to messages.txt
- *     4. If the recipient is online, re-encrypts and sends EDELIVER
- *     5. Sends ACK:OK back to the sender
- *
- *   Control commands (LOGIN, LOGOUT, LIST, etc.) are NOT encrypted
- *   because they carry no sensitive message content.
- */
-
  #include <stdio.h>
  #include <string.h>
  #include <stdlib.h>
@@ -120,27 +76,7 @@
      return result;
  }
  
- /* ============================================================
-  * FUNCTION : handle_encrypted_msg
-  * PURPOSE  : Handle an EMSG frame — the encrypted message path.
-  *
-  *   EMSG:<base64(IV + ciphertext)>
-  *
-  *   Steps:
-  *     1. Base64-decode to get raw ciphertext
-  *     2. Decrypt with AES-256-CBC key K
-  *     3. Verify H(plaintext || S) — reject if mismatch
-  *     4. Parse decrypted command: MSG:from:to:body
-  *     5. Store body to messages.txt (plaintext in storage)
-  *     6. If recipient is online: re-encrypt and send EDELIVER
-  *     7. Send ACK:OK back to sender
-  *
-  *   Storing plaintext in messages.txt is a deliberate choice for
-  *   this iteration — it lets the server build inbox and history
-  *   views without needing client-side decryption of stored messages.
-  *   A future iteration could store ciphertext and move decryption
-  *   entirely to the client.
-  * ============================================================ */
+
  static void handle_encrypted_msg(int client_fd, const char *b64_payload) {
     char response[BUFFER_SIZE];
 
@@ -225,14 +161,7 @@
      send_msg(client_fd, CMD_ACK_OK);
  }
  
- /* ============================================================
-  * FUNCTION : handle_command
-  * PURPOSE  : Parse and execute one command from a client
-  * INPUT    : client_fd      — socket for this client
-  *            cmd            — the command string received
-  *            session_user   — buffer holding logged-in username
-  *                             (empty string = not logged in)
-  * ============================================================ */
+
  static void handle_command(int client_fd, char *cmd, char *session_user) {
      char response[BUFFER_SIZE];
      char command[16] = {0};
@@ -369,9 +298,7 @@
      }
  }
  
- /* ============================================================
-  * FUNCTION : client_session
-  * ============================================================ */
+
  static void client_session(int client_fd) {
      char buf[BUFFER_SIZE];
      char session_user[MAX_NAME_LEN + 1] = "";
@@ -389,9 +316,7 @@
      close(client_fd);
  }
  
- /* ============================================================
-  * FUNCTION : server_run
-  * ============================================================ */
+
  void server_run(void) {
      int server_fd;
      struct sockaddr_in addr;

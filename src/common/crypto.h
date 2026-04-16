@@ -1,28 +1,3 @@
-/*
- * SCS3304 — One-on-One Chat Application
- * Cryptography Module Header
- *
- * Implements diagram (d) from the Computing Security lesson:
- *
- *   SENDER:
- *     1. Concatenate message M with shared secret S:  M || S
- *     2. Hash the concatenation:                      H(M || S)
- *     3. Encrypt message + hash with key K:           E(K, [M || H(M || S)])
- *     4. Send the ciphertext
- *
- *   RECEIVER:
- *     1. Decrypt with key K:                          D(K, ciphertext) → M, H(M || S)
- *     2. Concatenate decrypted M with own copy of S:  M || S
- *     3. Hash it:                                     H(M || S)
- *     4. Compare computed hash with decrypted hash
- *     5. If equal → message is authentic and unaltered
- *
- * Provides: confidentiality (AES-256-CBC) + authentication + integrity (HMAC-SHA256)
- *
- * Libraries: OpenSSL (libssl, libcrypto)
- * Build:     link with -lssl -lcrypto
- */
-
 #ifndef CRYPTO_H
 #define CRYPTO_H
 

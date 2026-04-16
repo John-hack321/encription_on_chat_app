@@ -1,38 +1,3 @@
-/*
- * SCS3304 — One-on-One Chat Application
- * User Manager Module — Client-Server Version
- *
- * CONCURRENCY AND FILE LOCKING:
- *   In the client-server model, multiple clients can be connected
- *   simultaneously. Each client runs in its own child process (via
- *   fork). If two processes try to write to users.txt at the same
- *   time, their writes can interleave and corrupt the file.
- *
- *   We prevent this with flock() — a POSIX file locking mechanism.
- *
- *   HOW flock() WORKS:
- *     - LOCK_EX : exclusive lock — only one process can hold this
- *                 at a time. Any other process calling flock(LOCK_EX)
- *                 will BLOCK (wait) until the first one unlocks.
- *     - LOCK_SH : shared lock — multiple processes can read at once,
- *                 but nobody can write while a shared lock is held.
- *     - LOCK_UN : release the lock.
- *
- *   Pattern used in every write function:
- *     1. fopen the file
- *     2. flock(LOCK_EX)  ← grab exclusive write lock
- *     3. do the write
- *     4. flock(LOCK_UN)  ← release
- *     5. fclose
- *
- *   Pattern used in read functions:
- *     1. fopen the file
- *     2. flock(LOCK_SH)  ← grab shared read lock
- *     3. read the data
- *     4. flock(LOCK_UN)  ← release
- *     5. fclose
- */
-
  #include <stdio.h>
  #include <string.h>
  #include <time.h>
@@ -85,11 +50,7 @@
      return SUCCESS;
  }
  
- /* ============================================================
-  * FUNCTION : user_exists
-  * PURPOSE  : Check whether a username is in users.txt
-  * OUTPUT   : 1 if found, 0 if not
-  * ============================================================ */
+
  int user_exists(const char *username) {
      char lines[MAX_USERS][128];
      int  count = load_users(lines);
@@ -101,11 +62,7 @@
      return 0;
  }
  
- /* ============================================================
-  * FUNCTION : is_online
-  * PURPOSE  : Check whether a user's status is ONLINE
-  * OUTPUT   : 1 if ONLINE, 0 otherwise
-  * ============================================================ */
+
  int is_online(const char *username) {
      char lines[MAX_USERS][128];
      int  count = load_users(lines);
@@ -118,11 +75,7 @@
      return 0;
  }
  
- /* ============================================================
-  * FUNCTION : register_user
-  * PURPOSE  : Add a new user with a hashed password
-  * OUTPUT   : SUCCESS, ERR_DUPLICATE, ERR_INVALID, ERR_FULL, ERR_FILE
-  * ============================================================ */
+
  int register_user(const char *username, const char *password) {
      if (strlen(username) == 0 || strlen(password) < MIN_PASSWORD_LEN)
          return ERR_INVALID;
@@ -153,11 +106,7 @@
      return SUCCESS;
  }
  
- /* ============================================================
-  * FUNCTION : login_user
-  * PURPOSE  : Verify credentials and mark user ONLINE
-  * OUTPUT   : SUCCESS, ERR_NOT_FOUND, ERR_WRONG_PASS, ERR_ALREADY_ON
-  * ============================================================ */
+
  int login_user(const char *username, const char *password) {
      char lines[MAX_USERS][128];
      int  count = load_users(lines);
@@ -180,10 +129,7 @@
      return save_lines(lines, count);
  }
  
- /* ============================================================
-  * FUNCTION : logout_user
-  * PURPOSE  : Mark user OFFLINE
-  * ============================================================ */
+
  int logout_user(const char *username) {
      char lines[MAX_USERS][128];
      int  count = load_users(lines);
@@ -204,10 +150,7 @@
      return save_lines(lines, count);
  }
  
- /* ============================================================
-  * FUNCTION : deregister_user
-  * PURPOSE  : Permanently remove a user from users.txt
-  * ============================================================ */
+
  int deregister_user(const char *username) {
      char lines[MAX_USERS][128];
      int  count = load_users(lines);
@@ -229,11 +172,7 @@
      return found ? SUCCESS : ERR_NOT_FOUND;
  }
  
- /* ============================================================
-  * FUNCTION : search_user
-  * PURPOSE  : Print one user's status info to the terminal
-  * OUTPUT   : 1 if found, 0 if not
-  * ============================================================ */
+
  int search_user(const char *username) {
      char lines[MAX_USERS][128];
      int  count = load_users(lines);
@@ -253,10 +192,7 @@
      return 0;
  }
  
- /* ============================================================
-  * FUNCTION : list_users
-  * PURPOSE  : Print a table of all users — ONLINE users first
-  * ============================================================ */
+
  void list_users(void) {
      char lines[MAX_USERS][128];
      int  count = load_users(lines);
@@ -286,11 +222,7 @@
      printf("  └────┴───────────────────┴──────────┴──────────────────┘\n");
  }
  
- /* ============================================================
-  * FUNCTION : build_user_list
-  * PURPOSE  : Build a LIST_RESULT string to send over the socket
-  *            Format: LIST_RESULT:name:status|name:status|...
-  * ============================================================ */
+
  void build_user_list(char *buf, int buf_size) {
      char lines[MAX_USERS][128];
      int  count = load_users(lines);

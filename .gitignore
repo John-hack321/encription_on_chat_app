@@ -28,3 +28,6 @@ obj/
 # other part that are irrelevant 
 chat
 progress.txt
+
+# Ignore application data files (users create these themselves)
+data/*.txt

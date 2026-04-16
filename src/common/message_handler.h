@@ -1,11 +1,3 @@
-/*
- * SCS3304 — One-on-One Chat Application
- * Message Handler Module Header
- *
- * data/messages.txt  — timestamp|from|to|body
- * data/chat_log.txt  — [timestamp] from -> to : body
- */
-
  #ifndef MESSAGE_HANDLER_H
  #define MESSAGE_HANDLER_H
  
