@@ -9,13 +9,13 @@ Group members:
     ZACHARIAH ABDI        SCS3/147352/2023
 ```
 
-A standalone terminal-based one-on-one chat application written in C.
+A client-server terminal-based one-on-one chat application written in C.
 Built as Assignment 1 for the Networks and Distributed Programming course (SCS3304).
 
-This is **iteration 1 — standalone (non client-server)**. Two users share one machine.
-Each user logs in, sends and reads messages, then logs out. The next user logs in and
-sees their inbox. No sockets, no network layer — persistence is handled entirely through
-flat text files as required by the course.
+This is **iteration 2 — client-server architecture**. Multiple users can connect simultaneously
+from different machines. The server handles client connections, message routing, and user management.
+Communication happens over TCP sockets, while persistence is maintained through flat text files
+as required by the course.
 
 ---
 
@@ -34,6 +34,9 @@ flat text files as required by the course.
 | Search user by username | done |
 | List all users with status | done |
 | Delete account (deregister) | done |
+| TCP socket communication | done |
+| Multi-client server handling | done |
+| Concurrent client connections | done |
 | Flat file persistence (no database) | done |
 
 ---
@@ -44,22 +47,26 @@ flat text files as required by the course.
 chat-app/
 ├── README.md
 ├── Makefile
+├── server                     # compiled server executable
+├── client                     # compiled client executable
 ├── docs/
 │   ├── diagrams/              # architecture and function tree diagrams
 │   ├── design.md              # architectural and algorithmic write-up
-│   └── protocol.md            # protocol documentation (iteration 2)
+│   └── protocol.md            # protocol documentation
 ├── src/
-│   ├── main.c                 # entry point, all menu logic
-│   ├── server/                # reserved for iteration 2 (client-server)
+│   ├── server_main.c          # server entry point
+│   ├── client_main.c          # client entry point
+│   ├── server/                # server implementation
 │   │   ├── server.c
 │   │   └── server.h
-│   ├── client/                # reserved for iteration 2 (client-server)
+│   ├── client/                # client implementation
 │   │   ├── client.c
 │   │   └── client.h
 │   └── common/
 │       ├── auth.c / auth.h          # password hashing and verification
 │       ├── user_manager.c / .h      # register, login, logout, search, list
-│       └── message_handler.c / .h   # send, inbox, conversation history
+│       ├── message_handler.c / .h   # send, inbox, conversation history
+│       └── utils.c / .h             # utility functions
 └── data/
     ├── users.txt              # username:hash:status:last_seen
     ├── messages.txt           # timestamp|from|to|body
@@ -70,25 +77,43 @@ chat-app/
 
 ## Architecture
 
+### Server Side
 ```
-main()
-  └── welcome_menu()                     ← login / register / list / exit
-        ├── do_register()                → register_user()
-        │                                  auth: hash_password()
-        ├── do_login()                   → login_user()
-        │                                  auth: verify_password()
-        └── logged_in_menu()             ← shown after successful login
-              ├── do_send_message()      → send_message()   → messages.txt
-              │                                             → chat_log.txt
-              ├── do_inbox()             → show_inbox()     ← messages.txt
-              ├── do_conversation()      → show_conversation()
-              ├── do_search()            → search_user()    ← users.txt
-              ├── do_logout()            → logout_user()    → users.txt
-              └── do_deregister()        → deregister_user()
+server_main()
+  └── server_run()                       ← creates listening socket
+        ├── accept_connections()         ← handles multiple clients
+        ├── handle_client()              ← per-client thread/process
+        │     ├── parse_client_request()
+        │     ├── route_to_handler()
+        │     │     ├── register_user()
+        │     │     ├── login_user()
+        │     │     ├── send_message()
+        │     │     ├── get_inbox()
+        │     │     └── logout_user()
+        │     └── send_response()
+        └── update_data_files()          → users.txt, messages.txt, chat_log.txt
+```
+
+### Client Side
+```
+client_main()
+  └── client_run()                       ← connects to server
+        ├── welcome_menu()               ← login / register / list / exit
+        │     ├── do_register()          → send to server
+        │     ├── do_login()             → send to server
+        │     └── do_list_users()       → send to server
+        └── logged_in_menu()            ← shown after successful login
+              ├── do_send_message()      → send to server
+              ├── do_inbox()             → request from server
+              ├── do_conversation()      → request from server
+              ├── do_search()            → request from server
+              ├── do_logout()            → send to server
+              └── do_deregister()        → send to server
 ```
 
 All user state lives in `data/users.txt`. All messages live in `data/messages.txt`.
 The `data/chat_log.txt` file is an append-only audit trail — nothing is ever deleted from it.
+The server manages all data access; clients communicate only through TCP sockets.
 
 ---
 
@@ -167,11 +192,14 @@ cd chat-app
 # 2. create the data files (only needed once)
 touch data/users.txt data/messages.txt data/chat_log.txt
 
-# 3. build
+# 3. build both server and client
 make
 
-# 4. run
-./chat
+# 4. start the server (in one terminal)
+./server
+
+# 5. start clients (in other terminals)
+./client
 ```
 
 To rebuild from scratch:
@@ -183,10 +211,22 @@ make clean && make
 
 ## Usage Walkthrough
 
+### Server Interface
 ```
 ╔══════════════════════════════════════════╗
-║      one-on-one chat  —  SCS3304        ║
-║      standalone (non client-server)     ║
+║   one-on-one chat  —  server             ║
+║   SCS3304 / client-server model          ║
+╚══════════════════════════════════════════╝
+
+Server listening on port 8080...
+Waiting for client connections...
+```
+
+### Client Interface
+```
+╔══════════════════════════════════════════╗
+║   one-on-one chat  —  client             ║
+║   SCS3304 / client-server model          ║
 ╚══════════════════════════════════════════╝
 
   1.  login
@@ -197,12 +237,11 @@ make clean && make
 ```
 
 **Typical flow:**
-1. User A registers → sets username + password
-2. User A logs in → sends a message to User B
-3. User A logs out
-4. User B logs in → sees message in inbox → replies
-5. User B logs out
-6. Repeat
+1. Start server: `./server` (runs continuously)
+2. User A starts client: `./client` → registers → logs in → sends message to User B
+3. User B starts client: `./client` → logs in → sees message in inbox → replies
+4. Multiple clients can connect simultaneously
+5. Server handles all message routing and data persistence
 
 ---
 
@@ -210,31 +249,43 @@ make clean && make
 
 | Module | File | Responsibility |
 |---|---|---|
-| Entry point + menus | `src/main.c` | All user-facing screens and menu logic |
+| Server entry point | `src/server_main.c` | Server startup and connection handling |
+| Client entry point | `src/client_main.c` | Client startup and connection to server |
+| Server logic | `src/server/server.c` | Multi-client handling, request routing, data management |
+| Client logic | `src/client/client.c` | User interface, server communication, menu handling |
 | Authentication | `src/common/auth.c` | djb2 password hashing and verification |
 | User management | `src/common/user_manager.c` | Register, login, logout, search, list, deregister |
 | Message handling | `src/common/message_handler.c` | Send, inbox, conversation history, file logging |
+| Utilities | `src/common/utils.c` | Common helper functions and utilities |
 
 ---
 
 ## Is Concurrency Required?
 
-No. In the standalone model, only one user is active at a time. Users take turns —
-there is no simultaneous access to shared data. Therefore no threads, no `select()`,
-and no mutex locking is needed.
+Yes. In the client-server model, multiple users can be active simultaneously. The server
+must handle concurrent client connections without blocking. This requires:
 
-Concurrency **will** be required in iteration 2 (client-server), where multiple clients
-connect simultaneously and the server must handle them without blocking.
+- **Multi-process or multi-threading**: Each client connection is handled independently
+- **Socket multiplexing**: Using `select()` or similar to monitor multiple connections
+- **Process synchronization**: Mutex locking or similar mechanisms for shared data access
+- **Signal handling**: Proper cleanup when clients disconnect unexpectedly
+
+The server implementation uses either `fork()` to create child processes for each client
+or pthreads for concurrent handling, ensuring that one client's actions don't block others.
 
 ---
 
 ## Development Notes
 
-- No external libraries — only the C standard library
+- No external libraries — only the C standard library and POSIX socket APIs
 - No database — flat text files only, as required by Ms. Ronge
 - All file operations check for `NULL` before use
+- All socket operations check for return values and handle errors appropriately
 - Top-down structured programming and modular design throughout
+- Concurrent server implementation using fork() or pthreads
+- Proper signal handling for graceful shutdown and client disconnection
 - Tested on Kali Linux with gcc 12
+- Network communication over TCP/IP on configurable port (default: 8080)
 
 ---
 
@@ -242,6 +293,6 @@ connect simultaneously and the server must handle them without blocking.
 
 | Iteration | Description | Status |
 |---|---|---|
-| 1 | Standalone, single machine, no sockets | current |
-| 2 | Client-server, two binaries, TCP sockets | upcoming |
+| 1 | Standalone, single machine, no sockets | completed |
+| 2 | Client-server, two binaries, TCP sockets | **current** |
 | 3 | Group chat, broadcast, multiple clients | upcoming |
