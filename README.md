@@ -2,11 +2,7 @@
 
 ```
 Group members:
-    JOHN OKELLO           SCS3/2286/2023
-    BRIAN KINOTI          SCS3/146781/2023
-    CHEBII NEHEMIAH KOECH SCS3/145415/2022
-    MANDELA MBELEZI       P15/2108/2021
-    ZACHARIAH ABDI        SCS3/147352/2023
+  
 ```
 
 A **cryptographically secure** client-server terminal-based one-on-one chat application written in C.
